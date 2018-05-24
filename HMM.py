@@ -20,7 +20,7 @@ parser.add_argument('--clusters', type=int, default=64, help='num clusters')
 parser.add_argument('--condition', type=str, default='none', help='Condition on none|word|lstm')
 parser.add_argument('--one-hot', action='store_true', default=False, help='1-hot clusters')
 parser.add_argument('--log', type=str, default='', help='Log name')
-parser.add_argument('--type', type=str, default='hmm', help='hmm|jordan|elman')
+parser.add_argument('--type', type=str, default='hmm', help='hmm|jordan|elman|gru|lstm')
 args = parser.parse_args()
 
 
@@ -83,7 +83,7 @@ class Net(nn.Module):
     self.embeddings.requires_grad = False
 
     if args.condition == 'lstm':
-      self.enc = nn.LSTM(self.embed_dim, self.embed_dim, batch_first=True)
+      self.cond = nn.LSTM(self.embed_dim, self.embed_dim, batch_first=True)
 
     if args.type != 'hmm': 
 
@@ -93,8 +93,18 @@ class Net(nn.Module):
         self.start_1hot[0, START] = 1
         self.start_1hot.requires_grad = False
 
-      if args.type == 'elman':
+      elif args.type == 'elman':
         self.trans = nn.Linear(self.embed_dim, self.embed_dim) 
+
+      elif args.type == 'gru':
+        self.trans = nn.GRUCell(self.embed_dim, self.embed_dim)
+
+      elif args.type == 'lstm':
+        self.trans = nn.LSTMCell(self.embed_dim, self.embed_dim)
+
+      elif args.type == 'ran':
+        print("RANs are not implemented")
+        sys.exit()
 
       self.vocab = nn.Linear(self.embed_dim, len(voc2i), bias=True)    # f(cluster, word)
       self.vocab.weight.data.uniform_(-1, 1)                           # Otherwise root(V) is huge
@@ -130,7 +140,7 @@ class Net(nn.Module):
     w = x.clone()
     x = self.embeddings(x)
     if args.condition == 'lstm':
-      x, _ = self.enc(x)
+      x, _ = self.cond(x)
     x = x.permute(0, 2, 1)
     N = args.batch_size
     T = w.size()[1]
@@ -138,19 +148,29 @@ class Net(nn.Module):
     if args.type != 'hmm':
       cur_alpha = torch.zeros(N).to(device)
       h_tm1 = torch.zeros(N, self.embed_dim).to(device)
+      if args.type == 'lstm':
+        c_tm1 = torch.zeros(N, self.embed_dim).to(device)
+
 
       if args.type == 'jordan':
         b_h = self.b_h(self.dummy)
         y_tm1 = self.start_1hot.expand(N, len(voc2i))   # One hot start
 
       for t in range(1, T):
-        if args.type == 'elman':
-          # h_t = act(W_h x_t + U_h h_t-1 + b_h)
-          h_t = F.tanh(x[:,:,t-1] + self.trans(h_tm1))
-
         if args.type == 'jordan':
           # h_t = act(W_h x_t + U_h y_t-1 + b_h)
           h_t = F.tanh(x[:,:,t-1] +  y_tm1 @ self.embeddings.weight + b_h)
+
+        elif args.type == 'elman':
+          # h_t = act(W_h x_t + U_h h_t-1 + b_h)
+          h_t = F.tanh(x[:,:,t-1] + self.trans(h_tm1))
+
+        elif args.type == 'gru':
+          h_t = self.trans(x[:,:,t-1], h_tm1)
+
+        elif args.type == 'lstm':
+          h_t, c_t = self.trans(x[:,:,t-1], (h_tm1, c_tm1))
+          c_tm1 = c_t.clone()
 
         # y_t = act(W_y h_t + b_y)
         y_t = F.log_softmax(self.vocab(h_t), -1)        # Emission
