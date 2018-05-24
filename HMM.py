@@ -20,8 +20,7 @@ parser.add_argument('--clusters', type=int, default=64, help='num clusters')
 parser.add_argument('--condition', type=str, default='none', help='Condition on none|word|lstm')
 parser.add_argument('--one-hot', action='store_true', default=False, help='1-hot clusters')
 parser.add_argument('--log', type=str, default='', help='Log name')
-parser.add_argument('--jordan', action='store_true', default=False, help='Jordan Network')
-parser.add_argument('--elman', action='store_true', default=False, help='Elman Network')
+parser.add_argument('--type', type=str, default='hmm', help='hmm|jordan|elman')
 args = parser.parse_args()
 
 
@@ -29,10 +28,8 @@ fname = ".c{}.h{}.l{}".format(args.clusters, args.hidden_dim, args.max_len)
 if args.one_hot:
   fname += ".1hot"
 fname += ".{}".format(args.condition)
-if args.jordan:
-  fname += ".jordan"
 
-writer = SummaryWriter("./log/HMM" + args.log + fname)
+writer = SummaryWriter("./log/{}".format(args.type) + args.log + fname)
 
 def expand(text):
   text.insert(START, 0)
@@ -88,35 +85,45 @@ class Net(nn.Module):
     if args.condition == 'lstm':
       self.enc = nn.LSTM(self.embed_dim, self.embed_dim, batch_first=True)
 
-    if args.jordan:
-      self.b_h = nn.Linear(1, self.embed_dim)
-      self.start_1hot = torch.zeros(1, len(voc2i)).to(device)
-      self.start_1hot[0, START] = 1
-      self.start_1hot.requires_grad = False
+    if args.type != 'hmm': 
 
-    # Cluster vectors
-    self.Cs = []
-    for i in range(self.num_clusters):
-      self.Cs.append(torch.zeros(args.batch_size).long().to(device) + i)
+      if args.type == 'jordan':
+        self.b_h = nn.Linear(1, self.embed_dim)
+        self.start_1hot = torch.zeros(1, len(voc2i)).to(device)
+        self.start_1hot[0, START] = 1
+        self.start_1hot.requires_grad = False
 
-    # Embed clusters
-    self.one_hot = False
-    if self.one_hot:
-      self.emb_cluster = nn.embedding(self.num_clusters, self.num_clusters)
-      self.emb_cluster.weight.data = torch.eye(self.num_clusters)
-      self.emb_cluster.requires_grad = False
+      if args.type == 'elman':
+        self.trans = nn.Linear(self.embed_dim, self.embed_dim) 
+
+      self.vocab = nn.Linear(self.embed_dim, len(voc2i), bias=True)    # f(cluster, word)
+      self.vocab.weight.data.uniform_(-1, 1)                           # Otherwise root(V) is huge
+
     else:
-      self.emb_cluster = nn.Embedding(self.num_clusters, self.num_clusters)
+      # Cluster vectors
+      self.Cs = []
+      for i in range(self.num_clusters):
+        self.Cs.append(torch.zeros(args.batch_size).long().to(device) + i)
 
-    # Global HMM statistics
-    self.start = nn.Linear(1, self.num_clusters)
-    self.cluster_vocab = nn.Linear(self.embed_dim if args.jordan else self.num_clusters , len(voc2i), bias=args.jordan)   # f(cluster, word)
-    self.cluster_vocab.weight.data.uniform_(-1, 1)                              # Otherwise root(V) is huge
-    if args.condition == 'none':
-      self.cluster_trans = nn.Linear(1, self.num_clusters**2, bias=False)         # f(cluster, cluster)
-    else:
-      self.cluster_trans = nn.Linear(self.embed_dim, self.num_clusters**2, bias=False)         # f(cluster, cluster)
-    self.cluster_trans.weight.data.uniform_(-1, 1)                              # 0 to e (logspace)
+      # Embed clusters
+      self.one_hot = False
+      if self.one_hot:
+        self.emb_cluster = nn.embedding(self.num_clusters, self.num_clusters)
+        self.emb_cluster.weight.data = torch.eye(self.num_clusters)
+        self.emb_cluster.requires_grad = False
+      else:
+        self.emb_cluster = nn.Embedding(self.num_clusters, self.num_clusters)
+
+      # HMM Start Probabilities
+      self.start = nn.Linear(1, self.num_clusters)
+
+      self.vocab = nn.Linear(self.num_clusters, len(voc2i), bias=False)   # f(cluster, word)
+      self.vocab.weight.data.uniform_(-1, 1)                              # Otherwise root(V) is huge
+      if args.condition == 'none':
+        self.trans = nn.Linear(1, self.num_clusters**2, bias=False)         # f(cluster, cluster)
+      else:
+        self.trans = nn.Linear(self.embed_dim, self.num_clusters**2, bias=False)         # f(cluster, cluster)
+      self.trans.weight.data.uniform_(-1, 1)                              # 0 to e (logspace)
 
 
   def forward(self, x):
@@ -128,23 +135,25 @@ class Net(nn.Module):
     N = args.batch_size
     T = w.size()[1]
 
-    if args.elman:
-      # h_t = act(W_h x_t + U_h h_t-1 + b_h)
-      # y_t = act(W_y h_t + b_y)
-      print("Not implemented")
-      sys.exit()
-
-    if args.jordan:
-      # h_t = act(W_h x_t + U_h y_t-1 + b_h)
-      # y_t = act(W_y h_t + b_y)
-      b_h = self.b_h(self.dummy)
+    if args.type != 'hmm':
       cur_alpha = torch.zeros(N).to(device)
-  
-      h_tm1 = torch.zeros(N, self.embed_dim)
-      y_tm1 = self.start_1hot.expand(N, len(voc2i))   # One hot start
+      h_tm1 = torch.zeros(N, self.embed_dim).to(device)
+
+      if args.type == 'jordan':
+        b_h = self.b_h(self.dummy)
+        y_tm1 = self.start_1hot.expand(N, len(voc2i))   # One hot start
+
       for t in range(1, T):
-        h_t = F.tanh(x[:,:,t] +  y_tm1 @ self.embeddings.weight + b_h)
-        y_t = F.log_softmax(self.cluster_vocab(h_t), -1)        # Emission
+        if args.type == 'elman':
+          # h_t = act(W_h x_t + U_h h_t-1 + b_h)
+          h_t = F.tanh(x[:,:,t] + self.trans(h_tm1))
+
+        if args.type == 'jordan':
+          # h_t = act(W_h x_t + U_h y_t-1 + b_h)
+          h_t = F.tanh(x[:,:,t] +  y_tm1 @ self.embeddings.weight + b_h)
+
+        # y_t = act(W_y h_t + b_y)
+        y_t = F.log_softmax(self.vocab(h_t), -1)        # Emission
 
         word_idx = w[:, t].unsqueeze(1)
         cur_alpha += y_t.gather(1, word_idx).squeeze()           # Word Prob
@@ -153,24 +162,24 @@ class Net(nn.Module):
         h_tm1 = h_t.clone()
       return -1 * torch.mean(cur_alpha)
 
-    if args.HMM:
+    if args.type == 'hmm':
       K = self.num_clusters
       
       if args.condition == 'none':
-        tran = F.log_softmax(self.cluster_trans(self.dummy).view(N, K, K), dim=-1)
+        tran = F.log_softmax(self.trans(self.dummy).view(N, K, K), dim=-1)
       
       pre_alpha = torch.zeros(N, K)
       cur_alpha = torch.zeros(N, K)
       pre_alpha = F.log_softmax(self.start(self.dummy).expand(N,K), dim=-1)
       
       Emissions = torch.stack([
-          F.log_softmax(self.cluster_vocab(self.emb_cluster(self.Cs[i])), -1)
+          F.log_softmax(self.vocab(self.emb_cluster(self.Cs[i])), -1)
           for i in range(K)])
       Emissions = Emissions.transpose(0, 1)    # Move batch to the front
       
       for t in range(1, T):
         if args.condition != 'none':
-          tran = F.log_softmax(self.cluster_trans(x[:,:,t-1]).view(N, K, K), dim=-1)
+          tran = F.log_softmax(self.trans(x[:,:,t-1]).view(N, K, K), dim=-1)
         
         # Transition
         cur_alpha = pre_alpha.unsqueeze(-1).expand(N, K, K) + tran
@@ -204,7 +213,7 @@ class Net(nn.Module):
   def print_emissions(self):
     o = open("Emissions.{}.txt".format(fname),'w')
     for i in range(self.num_clusters):
-      V = F.log_softmax(self.cluster_vocab(self.emb_cluster(self.Cs[i])), dim=-1)
+      V = F.log_softmax(self.vocab(self.emb_cluster(self.Cs[i])), dim=-1)
       listed = [(torch.exp(V[0][j]).data.item(), str(i2voc[j])) for j in range(len(voc2i))]
       listed.sort()
       listed.reverse()
@@ -226,7 +235,7 @@ step = 0
 for epoch in range(args.epochs):
 
   # Print # Training
-  if not args.jordan:
+  if args.type == 'hmm':
     net.print_emissions()
 
   # Training
