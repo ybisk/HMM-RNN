@@ -11,17 +11,22 @@ from torchviz import make_dot, make_dot_from_trace
 from tensorboardX import SummaryWriter
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-parser = argparse.ArgumentParser(description='HMM')
+# TODO: Embed dim is fixed according to GloVe, these should be decoupled
+parser = argparse.ArgumentParser(description='HMM-RNN')
 parser.add_argument('--batch-size', type=int, default=32, help='batch size')
 parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
 parser.add_argument('--max-len', type=int, default=20, help='max seq len')
 parser.add_argument('--hidden-dim', type=int, default=64, help='hidden dim')
 parser.add_argument('--clusters', type=int, default=64, help='num clusters')
-parser.add_argument('--condition', type=str, default='none', help='Condition on none|word|lstm')
-parser.add_argument('--one-hot', action='store_true', default=False, help='1-hot clusters')
-parser.add_argument('--learn-emb', action='store_true', default=False, help='Learn embeddings instead of GloVe')
+parser.add_argument('--condition', type=str, default='none',
+                    help='none|word|lstm')
+parser.add_argument('--one-hot', action='store_true', default=False,
+                    help='1-hot clusters')
+parser.add_argument('--learn-emb', action='store_true', default=False,
+                    help='Learn embeddings instead of GloVe')
 parser.add_argument('--log', type=str, default='./log/', help='Log dir')
-parser.add_argument('--type', type=str, default='hmm', help='hmm|jordan|elman|dist|gru|lstm')
+parser.add_argument('--type', type=str, default='hmm',
+                    help='hmm|jordan|elman|dist|gru|lstm')
 args = parser.parse_args()
 
 
@@ -31,7 +36,7 @@ if args.one_hot:
 fname += "_{}".format(args.condition)
 fname += "_l{}".format(args.max_len)
 if args.type == 'hmm':
-  fname += "_c{}_h{}_l{}".format(args.clusters, args.hidden_dim)
+  fname += "_c{}_h{}".format(args.clusters, args.hidden_dim)
 if args.learn_emb:
   fname += "_learnE"
 
@@ -84,7 +89,7 @@ class Net(nn.Module):
 
     # vocab x 100
     self.embeddings = nn.Embedding(len(voc2i), self.embed_dim)
-    if not args.learn_emb
+    if not args.learn_emb:
       self.embeddings.weight.data.copy_(
           torch.from_numpy(np.load("inference/infer_glove.npy")))
       self.embeddings.requires_grad = False
@@ -92,7 +97,7 @@ class Net(nn.Module):
     if args.condition == 'lstm':
       self.cond = nn.LSTM(self.embed_dim, self.embed_dim, batch_first=True)
 
-    if args.type != 'hmm': 
+    if args.type != 'hmm':
 
       if args.type == 'jordan':
         self.b_h = nn.Linear(1, self.embed_dim)
@@ -101,11 +106,11 @@ class Net(nn.Module):
         self.start_1hot.requires_grad = False
 
       elif args.type == 'elman':
-        self.trans = nn.Linear(self.embed_dim, self.embed_dim) 
+        self.trans = nn.Linear(self.embed_dim, self.embed_dim)
 
       elif args.type == 'dist':
         self.trans = nn.Linear(1, self.embed_dim**2, bias=False)
-        self.trans.weight.data.uniform_(-1, 1)                      
+        self.trans.weight.data.uniform_(-1, 1)
 
       elif args.type == 'gru':
         self.trans = nn.GRUCell(self.embed_dim, self.embed_dim)
@@ -188,7 +193,7 @@ class Net(nn.Module):
           tran = F.log_softmax(self.trans(self.dummy).view(N, K, K), dim=-1)
           h_t = h_tm1.unsqueeze(1).expand(N, K, K) + tran
           h_t = log_sum_exp(h_t, 1)
-          
+
         elif args.type == 'gru':
           if args.condition == 'word':
             h_t = self.trans(x[:,:,t-1], h_tm1)
@@ -213,37 +218,37 @@ class Net(nn.Module):
         h_tm1 = h_t.clone()
       return -1 * torch.mean(cur_alpha)
 
-    if args.type == 'hmm':
+    elif args.type == 'hmm':
       K = self.num_clusters
-      
+
       if args.condition == 'none':
         tran = F.log_softmax(self.trans(self.dummy).view(N, K, K), dim=-1)
-      
+
       pre_alpha = torch.zeros(N, K)
       cur_alpha = torch.zeros(N, K)
       pre_alpha = F.log_softmax(self.start(self.dummy).expand(N,K), dim=-1)
-      
+
       Emissions = torch.stack([
           F.log_softmax(self.vocab(self.emb_cluster(self.Cs[i])), -1)
           for i in range(K)])
       Emissions = Emissions.transpose(0, 1)    # Move batch to the front
-      
+
       for t in range(1, T):
         if args.condition != 'none':
           tran = F.log_softmax(self.trans(x[:,:,t-1]).view(N, K, K), dim=-1)
-        
+
         # Transition
         cur_alpha = pre_alpha.unsqueeze(-1).expand(N, K, K) + tran
         cur_alpha = log_sum_exp(cur_alpha, 1)
-        
+
         # Emission
         word_idx = w[:, t].unsqueeze(1).expand(N,K).unsqueeze(2)
-        cur_alpha[:, self.Kr] = cur_alpha[:, self.Kr] + \
-                           Emissions[:, self.Kr].gather(2, word_idx).squeeze()
-        
+        emit_prob = Emissions[:, self.Kr].gather(2, word_idx).squeeze()
+        cur_alpha[:, self.Kr] = cur_alpha[:, self.Kr] + emit_prob
+
         # Update
         pre_alpha = cur_alpha.clone()
-      
+
       # TODO – Perplexity 2^-Sum(p * log2(p))
       return -1 * torch.mean(log_sum_exp(cur_alpha, dim=1))
 
