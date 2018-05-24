@@ -19,17 +19,23 @@ parser.add_argument('--hidden-dim', type=int, default=64, help='hidden dim')
 parser.add_argument('--clusters', type=int, default=64, help='num clusters')
 parser.add_argument('--condition', type=str, default='none', help='Condition on none|word|lstm')
 parser.add_argument('--one-hot', action='store_true', default=False, help='1-hot clusters')
-parser.add_argument('--log', type=str, default='', help='Log name')
-parser.add_argument('--type', type=str, default='hmm', help='hmm|jordan|elman|gru|lstm')
+parser.add_argument('--learn-emb', action='store_true', default=False, help='Learn embeddings instead of GloVe')
+parser.add_argument('--log', type=str, default='./log/', help='Log dir')
+parser.add_argument('--type', type=str, default='hmm', help='hmm|jordan|elman|dist|gru|lstm')
 args = parser.parse_args()
 
 
-fname = ".c{}.h{}.l{}".format(args.clusters, args.hidden_dim, args.max_len)
+fname = "{}".format(args.type)
 if args.one_hot:
-  fname += ".1hot"
-fname += ".{}".format(args.condition)
+  fname += "_1hot"
+fname += "_{}".format(args.condition)
+fname += "_l{}".format(args.max_len)
+if args.type == 'hmm':
+  fname += "_c{}_h{}_l{}".format(args.clusters, args.hidden_dim)
+if args.learn_emb:
+  fname += "_learnE"
 
-writer = SummaryWriter("./log/{}".format(args.type) + args.log + fname)
+writer = SummaryWriter(args.log + fname)
 
 def expand(text):
   text.insert(START, 0)
@@ -78,9 +84,10 @@ class Net(nn.Module):
 
     # vocab x 100
     self.embeddings = nn.Embedding(len(voc2i), self.embed_dim)
-    self.embeddings.weight.data.copy_(
-        torch.from_numpy(np.load("inference/infer_glove.npy")))
-    self.embeddings.requires_grad = False
+    if not args.learn_emb
+      self.embeddings.weight.data.copy_(
+          torch.from_numpy(np.load("inference/infer_glove.npy")))
+      self.embeddings.requires_grad = False
 
     if args.condition == 'lstm':
       self.cond = nn.LSTM(self.embed_dim, self.embed_dim, batch_first=True)
@@ -95,6 +102,10 @@ class Net(nn.Module):
 
       elif args.type == 'elman':
         self.trans = nn.Linear(self.embed_dim, self.embed_dim) 
+
+      elif args.type == 'dist':
+        self.trans = nn.Linear(1, self.embed_dim**2, bias=False)
+        self.trans.weight.data.uniform_(-1, 1)                      
 
       elif args.type == 'gru':
         self.trans = nn.GRUCell(self.embed_dim, self.embed_dim)
@@ -147,10 +158,10 @@ class Net(nn.Module):
 
     if args.type != 'hmm':
       cur_alpha = torch.zeros(N).to(device)
+      zeros = torch.zeros(N, self.embed_dim).to(device)
       h_tm1 = torch.zeros(N, self.embed_dim).to(device)
       if args.type == 'lstm':
         c_tm1 = torch.zeros(N, self.embed_dim).to(device)
-
 
       if args.type == 'jordan':
         b_h = self.b_h(self.dummy)
@@ -159,18 +170,38 @@ class Net(nn.Module):
       for t in range(1, T):
         if args.type == 'jordan':
           # h_t = act(W_h x_t + U_h y_t-1 + b_h)
-          h_t = F.tanh(x[:,:,t-1] +  y_tm1 @ self.embeddings.weight + b_h)
+          if args.condition == 'word':
+            h_t = F.tanh(x[:,:,t-1] +  y_tm1 @ self.embeddings.weight + b_h)
+          else:
+            h_t = F.tanh(zeros +  y_tm1 @ self.embeddings.weight + b_h)
 
         elif args.type == 'elman':
           # h_t = act(W_h x_t + U_h h_t-1 + b_h)
-          h_t = F.tanh(x[:,:,t-1] + self.trans(h_tm1))
+          if args.condition == 'word':
+            h_t = F.tanh(x[:,:,t-1] + self.trans(h_tm1))
+          else:
+            h_t = F.tanh(zeros + self.trans(h_tm1))
 
+        elif args.type == 'dist':
+          # if h_t-1 is a distribution and multiply by transition matrix
+          K = self.embed_dim
+          tran = F.log_softmax(self.trans(self.dummy).view(N, K, K), dim=-1)
+          h_t = h_tm1.unsqueeze(1).expand(N, K, K) + tran
+          h_t = log_sum_exp(h_t, 1)
+          
         elif args.type == 'gru':
-          h_t = self.trans(x[:,:,t-1], h_tm1)
+          if args.condition == 'word':
+            h_t = self.trans(x[:,:,t-1], h_tm1)
+          else:
+            h_t = self.trans(zeros, h_tm1)
 
         elif args.type == 'lstm':
-          h_t, c_t = self.trans(x[:,:,t-1], (h_tm1, c_tm1))
-          c_tm1 = c_t.clone()
+          if args.condition == 'word':
+            h_t, c_t = self.trans(x[:,:,t-1], (h_tm1, c_tm1))
+            c_tm1 = c_t.clone()
+          else:
+            h_t, c_t = self.trans(zeros, (h_tm1, c_tm1))
+            c_tm1 = c_t.clone()
 
         # y_t = act(W_y h_t + b_y)
         y_t = F.log_softmax(self.vocab(h_t), -1)        # Emission
