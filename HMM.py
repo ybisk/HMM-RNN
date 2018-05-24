@@ -146,11 +146,11 @@ class Net(nn.Module):
       for t in range(1, T):
         if args.type == 'elman':
           # h_t = act(W_h x_t + U_h h_t-1 + b_h)
-          h_t = F.tanh(x[:,:,t] + self.trans(h_tm1))
+          h_t = F.tanh(x[:,:,t-1] + self.trans(h_tm1))
 
         if args.type == 'jordan':
           # h_t = act(W_h x_t + U_h y_t-1 + b_h)
-          h_t = F.tanh(x[:,:,t] +  y_tm1 @ self.embeddings.weight + b_h)
+          h_t = F.tanh(x[:,:,t-1] +  y_tm1 @ self.embeddings.weight + b_h)
 
         # y_t = act(W_y h_t + b_y)
         y_t = F.log_softmax(self.vocab(h_t), -1)        # Emission
