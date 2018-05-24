@@ -17,6 +17,8 @@ parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
 parser.add_argument('--max-len', type=int, default=20, help='max seq len')
 parser.add_argument('--hidden-dim', type=int, default=64, help='hidden dim')
 parser.add_argument('--clusters', type=int, default=64, help='num clusters')
+parser.add_argument('--previous_word', action='store_true', default=False, help='condition on previous word')
+parser.add_argument('--LSTM', action='store_true', default=False, help='condition on LSTM')
 parser.add_argument('--one-hot', action='store_true', default=False, help='1-hot clusters')
 parser.add_argument('--log', type=str, default='', help='Log name')
 args = parser.parse_args()
@@ -25,10 +27,15 @@ args = parser.parse_args()
 fname = ".c{}.h{}.l{}".format(args.clusters, args.hidden_dim, args.max_len)
 if args.one_hot:
   fname += ".1hot"
+if args.previous_word:
+  fname += ".prevW"
+if args.LSTM:
+  fname += ".LSTM"
 
 writer = SummaryWriter("./log/HMM" + args.log + fname)
 
 def expand(text):
+  text.insert(START, 0)
   while len(text) < args.max_len:
     text.append(NONE)
   return text[:args.max_len]
@@ -39,6 +46,7 @@ i2voc = pickle.load(gzip.open('data/i2v.freq.pkl.gz','rb'))
 
 NONE = voc2i["<PAD>"]
 UNK = voc2i["#UNK#"]
+START = voc2i["<S>"]
 
 data = []
 for seq in tdata:
@@ -77,6 +85,10 @@ class Net(nn.Module):
         torch.from_numpy(np.load("inference/infer_glove.npy")))
     self.embeddings.requires_grad = False
 
+    assert not (args.previous_word and args.LSTM)    # Mutually exclusive
+    if args.LSTM:
+      self.enc = nn.LSTM(self.embed_dim, self.embed_dim, batch_first=True)
+
     # Cluster vectors
     self.Cs = []
     for i in range(self.num_clusters):
@@ -95,19 +107,26 @@ class Net(nn.Module):
     self.start = nn.Linear(1, self.num_clusters)
     self.cluster_vocab = nn.Linear(self.num_clusters, len(voc2i), bias=False)   # f(cluster, word)
     self.cluster_vocab.weight.data.uniform_(-1, 1)                              # Otherwise root(V) is huge
-    self.cluster_trans = nn.Linear(1, self.num_clusters**2, bias=False)         # f(cluster, cluster)
+    if args.previous_word:
+      self.cluster_trans = nn.Linear(self.embed_dim, self.num_clusters**2, bias=False)         # f(cluster, cluster)
+    else:
+      self.cluster_trans = nn.Linear(1, self.num_clusters**2, bias=False)         # f(cluster, cluster)
     self.cluster_trans.weight.data.uniform_(-1, 1)                              # 0 to e (logspace)
 
 
   def forward(self, x):
     w = x.clone()
-    #x = self.embeddings(x).permute(0, 2, 1)
+    x = self.embeddings(x)
+    if args.LSTM:
+      x, _ = self.enc(x)
+    x = x.permute(0, 2, 1)
 
     N = args.batch_size
     T = w.size()[1]
     K = self.num_clusters
 
-    tran = F.log_softmax(self.cluster_trans(self.dummy).view(N, K, K), dim=-1)
+    if not args.previous_word:
+      tran = F.log_softmax(self.cluster_trans(self.dummy).view(N, K, K), dim=-1)
 
     pre_alpha = torch.zeros(N, K)
     cur_alpha = torch.zeros(N, K)
@@ -118,7 +137,9 @@ class Net(nn.Module):
         for i in range(K)])
     Emissions = Emissions.transpose(0, 1)    # Move batch to the front
 
-    for t in range(0, T):
+    for t in range(1, T):
+      if args.previous_word:
+        tran = F.log_softmax(self.cluster_trans(x[:,:,t-1]).view(N, K, K), dim=-1)
       # Transition
       cur_alpha = pre_alpha.unsqueeze(-1).expand(N, K, K) + tran
       cur_alpha = log_sum_exp(cur_alpha, 1)
@@ -131,6 +152,7 @@ class Net(nn.Module):
       # Update
       pre_alpha = cur_alpha.clone()
 
+    # TODO – Perplexity 2^-Sum(p * log2(p))
     return -1 * torch.mean(log_sum_exp(cur_alpha, dim=1))
 
 
