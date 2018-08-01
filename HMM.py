@@ -6,7 +6,6 @@ import torch.nn.functional as F
 #torch.manual_seed(1)
 import argparse
 torch.set_printoptions(threshold=1000, edgeitems=10)
-from torchviz import make_dot, make_dot_from_trace
 
 from tensorboardX import SummaryWriter
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -27,15 +26,18 @@ parser.add_argument('--learn-emb', action='store_true', default=False,
 parser.add_argument('--log', type=str, default='./log/', help='Log dir')
 parser.add_argument('--type', type=str, default='hmm',
                     help='hmm|jordan|elman|dist|gru|lstm')
+parser.add_argument('--note', type=str, default='',
+                    help='extra note on fname')
 args = parser.parse_args()
 
 
 fname = "{}".format(args.type)
+fname += ".{}".format(args.note) if len(args.note) > 0 else ""
 if args.one_hot:
   fname += "_1hot"
 fname += "_{}".format(args.condition)
 fname += "_l{}".format(args.max_len)
-if args.type == 'hmm':
+if 'hmm' in args.type:
   fname += "_c{}_h{}".format(args.clusters, args.hidden_dim)
 if args.learn_emb:
   fname += "_learnE"
@@ -97,7 +99,7 @@ class Net(nn.Module):
     if args.condition == 'lstm':
       self.cond = nn.LSTM(self.embed_dim, self.embed_dim, batch_first=True)
 
-    if args.type != 'hmm':
+    if 'hmm' not in args.type:
 
       if args.type == 'jordan':
         self.b_h = nn.Linear(1, self.embed_dim)
@@ -106,6 +108,12 @@ class Net(nn.Module):
         self.start_1hot.requires_grad = False
 
       elif args.type == 'elman':
+        self.trans = nn.Linear(self.embed_dim, self.embed_dim)
+
+      elif args.type == 'rnn-1':
+        self.trans = nn.Linear(self.embed_dim, self.embed_dim)
+
+      elif args.type == 'rnn-2':
         self.trans = nn.Linear(self.embed_dim, self.embed_dim)
 
       elif args.type == 'dist':
@@ -121,6 +129,7 @@ class Net(nn.Module):
       elif args.type == 'ran':
         print("RANs are not implemented")
         sys.exit()
+
 
       self.vocab = nn.Linear(self.embed_dim, len(voc2i), bias=True)    # f(cluster, word)
       self.vocab.weight.data.uniform_(-1, 1)                           # Otherwise root(V) is huge
@@ -161,7 +170,7 @@ class Net(nn.Module):
     N = args.batch_size
     T = w.size()[1]
 
-    if args.type != 'hmm':
+    if 'hmm' not in args.type:
       cur_alpha = torch.zeros(N).to(device)
       zeros = torch.zeros(N, self.embed_dim).to(device)
       h_tm1 = torch.zeros(N, self.embed_dim).to(device)
@@ -186,6 +195,18 @@ class Net(nn.Module):
             h_t = F.tanh(x[:,:,t-1] + self.trans(h_tm1))
           else:
             h_t = F.tanh(zeros + self.trans(h_tm1))
+
+        elif args.type == 'rnn-1':
+          if args.condition == 'word':
+            h_t = F.softmax(x[:,:,t-1] + self.trans(h_tm1))
+          else:
+            h_t = F.softmax(zeros + self.trans(h_tm1))
+
+        elif args.type == 'rnn-2':
+          if args.condition == 'word':
+            h_t = x[:,:,t-1] * F.softmax(self.trans(h_tm1))
+          else:
+            h_t = F.softmax(self.trans(h_tm1))
 
         elif args.type == 'dist':
           # if h_t-1 is a distribution and multiply by transition matrix
@@ -218,7 +239,7 @@ class Net(nn.Module):
         h_tm1 = h_t.clone()
       return -1 * torch.mean(cur_alpha)
 
-    elif args.type == 'hmm':
+    elif 'hmm' in args.type:
       K = self.num_clusters
 
       if args.condition == 'none':
@@ -226,7 +247,10 @@ class Net(nn.Module):
 
       pre_alpha = torch.zeros(N, K)
       cur_alpha = torch.zeros(N, K)
-      pre_alpha = F.log_softmax(self.start(self.dummy).expand(N,K), dim=-1)
+      if args.type == 'hmm+1':
+        pre_alpha = self.start(self.dummy).expand(N,K)
+      else:
+        pre_alpha = F.log_softmax(self.start(self.dummy).expand(N,K), dim=-1)
 
       Emissions = torch.stack([
           F.log_softmax(self.vocab(self.emb_cluster(self.Cs[i])), -1)
@@ -235,11 +259,17 @@ class Net(nn.Module):
 
       for t in range(1, T):
         if args.condition != 'none':
-          tran = F.log_softmax(self.trans(x[:,:,t-1]).view(N, K, K), dim=-1)
+          # Transition
+          if args.type == 'hmm+1':
+            tran = self.trans(x[:,:,t-1]).view(N, K, K)
+            pre_alpha = pre_alpha.unsqueeze(2)
+            cur_alpha = F.log_softmax(tran @ pre_alpha, dim=-1)
+            cur_alpha = cur_alpha.clone().squeeze()
+          else:
+            tran = F.log_softmax(self.trans(x[:,:,t-1]).view(N, K, K), dim=-1)
+            cur_alpha = pre_alpha.unsqueeze(-1).expand(N, K, K) + tran
+            cur_alpha = log_sum_exp(cur_alpha, 1)
 
-        # Transition
-        cur_alpha = pre_alpha.unsqueeze(-1).expand(N, K, K) + tran
-        cur_alpha = log_sum_exp(cur_alpha, 1)
 
         # Emission
         word_idx = w[:, t].unsqueeze(1).expand(N,K).unsqueeze(2)
@@ -291,7 +321,7 @@ step = 0
 for epoch in range(args.epochs):
 
   # Print # Training
-  if args.type == 'hmm':
+  if 'hmm' in args.type:
     net.print_emissions()
 
   # Training
