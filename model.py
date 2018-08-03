@@ -1,71 +1,7 @@
-import sys, pickle, gzip, random, tqdm
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-#torch.manual_seed(1)
-import argparse
-torch.set_printoptions(threshold=1000, edgeitems=10)
-
-from tensorboardX import SummaryWriter
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-# TODO: Embed dim is fixed according to GloVe, these should be decoupled
-parser = argparse.ArgumentParser(description='HMM-RNN')
-parser.add_argument('--batch-size', type=int, default=32, help='batch size')
-parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
-parser.add_argument('--max-len', type=int, default=20, help='max seq len')
-parser.add_argument('--hidden-dim', type=int, default=64, help='hidden dim')
-parser.add_argument('--clusters', type=int, default=64, help='num clusters')
-parser.add_argument('--condition', type=str, default='none',
-                    help='none|word|lstm')
-parser.add_argument('--one-hot', action='store_true', default=False,
-                    help='1-hot clusters')
-parser.add_argument('--learn-emb', action='store_true', default=False,
-                    help='Learn embeddings instead of GloVe')
-parser.add_argument('--log', type=str, default='./log/', help='Log dir')
-parser.add_argument('--type', type=str, default='hmm',
-                    help='hmm|jordan|elman|dist|gru|lstm')
-parser.add_argument('--note', type=str, default='',
-                    help='extra note on fname')
-args = parser.parse_args()
-
-
-fname = "{}".format(args.type)
-fname += ".{}".format(args.note) if len(args.note) > 0 else ""
-if args.one_hot:
-  fname += "_1hot"
-fname += "_{}".format(args.condition)
-fname += "_l{}".format(args.max_len)
-if 'hmm' in args.type:
-  fname += "_c{}_h{}".format(args.clusters, args.hidden_dim)
-if args.learn_emb:
-  fname += "_learnE"
-
-writer = SummaryWriter(args.log + fname)
-
-def expand(text):
-  text.insert(START, 0)
-  while len(text) < args.max_len:
-    text.append(NONE)
-  return text[:args.max_len]
-
-tdata = pickle.load(gzip.open('data/train.freq.pkl.gz','rb'))
-voc2i = pickle.load(gzip.open('data/v2i.freq.pkl.gz','rb'))
-i2voc = pickle.load(gzip.open('data/i2v.freq.pkl.gz','rb'))
-
-NONE = voc2i["<PAD>"]
-UNK = voc2i["#UNK#"]
-START = voc2i["<S>"]
-
-data = []
-for seq in tdata:
-  data.append(expand(seq))
-data = np.array(data)
-print("Train  {:5}".format(len(data)))
-
-def to_string(seq):
-  return " ".join([i2voc[s] for s in seq]).replace("<PAD>","")
 
 # Jan Buys Code
 def log_sum_exp(vec, dim):
@@ -79,19 +15,22 @@ def log_sum_exp(vec, dim):
   Model
 """
 class Net(nn.Module):
-  def __init__(self):
+  def __init__(self, vocab_size, args, device):
     super(Net, self).__init__()
     self.hidden = args.hidden_dim
     self.embed_dim = 100
-    self.vocab_dim = len(voc2i)
+    self.vocab_size = vocab_size
     self.num_clusters = args.clusters
+    self.type = args.type
+    self.condition = args.condition
+    self.device = device
 
     self.Kr = torch.from_numpy(np.array(range(self.num_clusters)))
     self.dummy = torch.ones(args.batch_size, 1).to(device)
 
     # vocab x 100
-    self.embeddings = nn.Embedding(len(voc2i), self.embed_dim)
-    if not args.learn_emb:
+    self.embeddings = nn.Embedding(vocab_size, self.embed_dim)
+    if args.glove_emb:
       self.embeddings.weight.data.copy_(
           torch.from_numpy(np.load("inference/infer_glove.npy")))
       self.embeddings.requires_grad = False
@@ -103,7 +42,7 @@ class Net(nn.Module):
 
       if args.type == 'jordan':
         self.b_h = nn.Linear(1, self.embed_dim)
-        self.start_1hot = torch.zeros(1, len(voc2i)).to(device)
+        self.start_1hot = torch.zeros(1, vocab_size).to(device)
         self.start_1hot[0, START] = 1
         self.start_1hot.requires_grad = False
 
@@ -131,14 +70,14 @@ class Net(nn.Module):
         sys.exit()
 
 
-      self.vocab = nn.Linear(self.embed_dim, len(voc2i), bias=True)    # f(cluster, word)
+      self.vocab = nn.Linear(self.embed_dim, vocab_size, bias=True)    # f(cluster, word)
       self.vocab.weight.data.uniform_(-1, 1)                           # Otherwise root(V) is huge
 
     else:
       # Cluster vectors
       self.Cs = []
       for i in range(self.num_clusters):
-        self.Cs.append(torch.zeros(args.batch_size).long().to(device) + i)
+        self.Cs.append(torch.zeros(args.batch_size).long().to(self.device) + i) #TODO do without to(device)?
 
       # Embed clusters
       self.one_hot = False
@@ -152,7 +91,7 @@ class Net(nn.Module):
       # HMM Start Probabilities
       self.start = nn.Linear(1, self.num_clusters)
 
-      self.vocab = nn.Linear(self.num_clusters, len(voc2i), bias=False)   # f(cluster, word)
+      self.vocab = nn.Linear(self.num_clusters, vocab_size, bias=False)   # f(cluster, word)
       self.vocab.weight.data.uniform_(-1, 1)                              # Otherwise root(V) is huge
       if args.condition == 'none':
         self.trans = nn.Linear(1, self.num_clusters**2, bias=False)         # f(cluster, cluster)
@@ -164,65 +103,65 @@ class Net(nn.Module):
   def forward(self, x):
     w = x.clone()
     x = self.embeddings(x)
-    if args.condition == 'lstm':
+    if self.condition == 'lstm':
       x, _ = self.cond(x)
     x = x.permute(0, 2, 1)
-    N = args.batch_size
+    N = x.size()[0] # args.batch_size
     T = w.size()[1]
 
-    if 'hmm' not in args.type:
-      cur_alpha = torch.zeros(N).to(device)
-      zeros = torch.zeros(N, self.embed_dim).to(device)
-      h_tm1 = torch.zeros(N, self.embed_dim).to(device)
-      if args.type == 'lstm':
-        c_tm1 = torch.zeros(N, self.embed_dim).to(device)
+    if 'hmm' not in self.type:
+      cur_alpha = torch.zeros(N).to(self.device)
+      zeros = torch.zeros(N, self.embed_dim).to(self.device)
+      h_tm1 = torch.zeros(N, self.embed_dim).to(self.device)
+      if self.type == 'lstm':
+        c_tm1 = torch.zeros(N, self.embed_dim).to(self.device)
 
-      if args.type == 'jordan':
+      if self.type == 'jordan':
         b_h = self.b_h(self.dummy)
-        y_tm1 = self.start_1hot.expand(N, len(voc2i))   # One hot start
+        y_tm1 = self.start_1hot.expand(N, self.vocab_size)   # One hot start
 
       for t in range(1, T):
-        if args.type == 'jordan':
+        if self.type == 'jordan':
           # h_t = act(W_h x_t + U_h y_t-1 + b_h)
-          if args.condition == 'word':
+          if self.condition == 'word':
             h_t = F.tanh(x[:,:,t-1] +  y_tm1 @ self.embeddings.weight + b_h)
           else:
             h_t = F.tanh(zeros +  y_tm1 @ self.embeddings.weight + b_h)
 
-        elif args.type == 'elman':
+        elif self.type == 'elman':
           # h_t = act(W_h x_t + U_h h_t-1 + b_h)
-          if args.condition == 'word':
+          if self.condition == 'word':
             h_t = F.tanh(x[:,:,t-1] + self.trans(h_tm1))
           else:
             h_t = F.tanh(zeros + self.trans(h_tm1))
 
-        elif args.type == 'rnn-1':
-          if args.condition == 'word':
+        elif self.type == 'rnn-1':
+          if self.condition == 'word':
             h_t = F.softmax(x[:,:,t-1] + self.trans(h_tm1))
           else:
             h_t = F.softmax(zeros + self.trans(h_tm1))
 
-        elif args.type == 'rnn-2':
-          if args.condition == 'word':
+        elif self.type == 'rnn-2':
+          if self.condition == 'word':
             h_t = x[:,:,t-1] * F.softmax(self.trans(h_tm1))
           else:
             h_t = F.softmax(self.trans(h_tm1))
 
-        elif args.type == 'dist':
+        elif self.type == 'dist':
           # if h_t-1 is a distribution and multiply by transition matrix
           K = self.embed_dim
           tran = F.log_softmax(self.trans(self.dummy).view(N, K, K), dim=-1)
           h_t = h_tm1.unsqueeze(1).expand(N, K, K) + tran
           h_t = log_sum_exp(h_t, 1)
 
-        elif args.type == 'gru':
-          if args.condition == 'word':
+        elif self.type == 'gru':
+          if self.condition == 'word':
             h_t = self.trans(x[:,:,t-1], h_tm1)
           else:
             h_t = self.trans(zeros, h_tm1)
 
-        elif args.type == 'lstm':
-          if args.condition == 'word':
+        elif self.type == 'lstm':
+          if self.condition == 'word':
             h_t, c_t = self.trans(x[:,:,t-1], (h_tm1, c_tm1))
             c_tm1 = c_t.clone()
           else:
@@ -239,15 +178,15 @@ class Net(nn.Module):
         h_tm1 = h_t.clone()
       return -1 * torch.mean(cur_alpha)
 
-    elif 'hmm' in args.type:
+    elif 'hmm' in self.type:
       K = self.num_clusters
 
-      if args.condition == 'none':
+      if self.condition == 'none':
         tran = F.log_softmax(self.trans(self.dummy).view(N, K, K), dim=-1)
 
-      pre_alpha = torch.zeros(N, K)
-      cur_alpha = torch.zeros(N, K)
-      if args.type == 'hmm+1':
+      pre_alpha = torch.zeros(N, K).to(self.device)
+      cur_alpha = torch.zeros(N, K).to(self.device)
+      if self.type == 'hmm+1':
         pre_alpha = self.start(self.dummy).expand(N,K)
       else:
         pre_alpha = F.log_softmax(self.start(self.dummy).expand(N,K), dim=-1)
@@ -258,9 +197,9 @@ class Net(nn.Module):
       Emissions = Emissions.transpose(0, 1)    # Move batch to the front
 
       for t in range(1, T):
-        if args.condition != 'none':
+        if self.condition != 'none':
           # Transition
-          if args.type == 'hmm+1':
+          if self.type == 'hmm+1':
             tran = self.trans(x[:,:,t-1]).view(N, K, K)
             cur_alpha = pre_alpha.unsqueeze(-1).expand(N, K, K) + tran
             cur_alpha = log_sum_exp(cur_alpha, 1)
@@ -288,25 +227,12 @@ class Net(nn.Module):
       # TODO – Perplexity 2^-Sum(p * log2(p))
       return -1 * torch.mean(log_sum_exp(cur_alpha, dim=1))
 
-
-  def step(self, src, train=True):
-    src = torch.from_numpy(src).to(device)
-    optimizer.zero_grad()
-    net.train() if train else net.eval()
-
-    LL = self(src)
-
-    if train:
-      loss = LL
-      loss.backward()
-      optimizer.step()
-    return LL
-
-  def print_emissions(self):
+  def print_emissions(self, fname, i2voc):
     o = open("Emissions.{}.txt".format(fname),'w')
     for i in range(self.num_clusters):
       V = F.log_softmax(self.vocab(self.emb_cluster(self.Cs[i])), dim=-1)
-      listed = [(torch.exp(V[0][j]).data.item(), str(i2voc[j])) for j in range(len(voc2i))]
+      listed = [(torch.exp(V[0][j]).data.item(), str(i2voc[j])) for j in
+              range(self.vocab_size)]
       listed.sort()
       listed.reverse()
       o.write("\n%d\n" % i)
@@ -314,37 +240,6 @@ class Net(nn.Module):
         o.write("   {:10.8f}  {:10s}\n".format(100*prob, str(word)))
     o.close()
 
-net = Net().to(device)
-optimizer = torch.optim.Adam(net.parameters(), lr=1e-4)#, weight_decay=1e-3)
 
-print("Starting Training")
-"""
-  Train
-"""
-#writer.add_graph(model=Net(), input_to_model=torch.ones((2,2)), verbose=True)
 
-step = 0
-for epoch in range(args.epochs):
 
-  # Print # Training
-  if 'hmm' in args.type:
-    net.print_emissions()
-
-  # Training
-  inds = list(range(len(data)))
-  random.shuffle(inds)
-  iterate = tqdm.tqdm(range(0, len(inds) - len(inds)%args.batch_size, args.batch_size), ncols=80)
-  for i in iterate:
-    r = inds[i:i + args.batch_size]
-    LL = net.step(data[r])
-    iterate.set_description("Loss {:8.4f}".format(LL.item()))
-
-    step += 1
-    writer.add_scalar('Loss', LL.item(), step)
-
-    #out = open("graph.dot",'w')
-    #out.write(str(make_dot(LL, params=dict(net.named_parameters()))))
-    #out.close()
-    #print("generated")
-    #sys.exit()
-writer.close()
