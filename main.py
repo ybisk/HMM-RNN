@@ -5,9 +5,21 @@ import argparse
 
 from tensorboardX import SummaryWriter
 
-import model
+import hmm
+import rnn
 
-# TODO: Embed dim is fixed according to GloVe, these should be decoupled
+def print_emissions(net, fname, i2voc):
+  o = open("Emissions.{}.txt".format(fname),'w')
+  for i in range(net.num_clusters):
+    e_list = net.emissions_list(i)
+    listed = [(e_list[j], str(i2voc[j])) for j in range(net.vocab_size)]
+    listed.sort()
+    listed.reverse()
+    o.write("\n%d\n" % i)
+    for prob, word in listed[:50]:
+      o.write("   {:10.8f}  {:10s}\n".format(100*prob, str(word)))
+  o.close()
+
 parser = argparse.ArgumentParser(description='HMM-RNN')
 parser.add_argument('--batch-size', type=int, default=32, help='batch size')
 parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
@@ -25,6 +37,8 @@ parser.add_argument('--type', type=str, default='hmm',
                     help='hmm|hmm+1|jordan|elman|dist|gru|lstm')
 parser.add_argument('--note', type=str, default='',
                     help='extra note on fname')
+parser.add_argument('--write-graph', action='store_true', default=False,
+                    help='Write out computation graph.')
 args = parser.parse_args()
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -69,21 +83,27 @@ def to_string(seq):
   return " ".join([i2voc[s] for s in seq]).replace("<PAD>","")
 
 vocab_size = len(voc2i)
-net = model.Net(vocab_size, args, device).to(device)
+
+if 'hmm' in args.type:
+  net = hmm.HMM(vocab_size, args, device).to(device)
+else:  
+  net = rnn.RNN(vocab_size, args, device).to(device)
+
 optimizer = torch.optim.Adam(net.parameters(), lr=1e-4)#, weight_decay=1e-3)
 
 print("Starting Training")
 """
   Train
 """
-#writer.add_graph(model=model.Net(), input_to_model=torch.ones((2,2)), verbose=True)
+if args.write_graph:
+  writer.add_graph(model=model.Net(), input_to_model=torch.ones((2,2)), verbose=True)
 
 step = 0
 for epoch in range(args.epochs):
 
   # Print # Training
   if 'hmm' in args.type:
-    net.print_emissions(fname, i2voc)
+    print_emissions(net, fname, i2voc)
 
   # Training
   inds = list(range(len(data)))
@@ -106,9 +126,12 @@ for epoch in range(args.epochs):
     step += 1
     writer.add_scalar('Loss', LL.item(), step)
 
-    #out = open("graph.dot",'w')
-    #out.write(str(make_dot(LL, params=dict(net.named_parameters()))))
-    #out.close()
-    #print("generated")
-    #sys.exit()
+    if args.write_graph:
+      out = open("graph.dot",'w')
+      out.write(str(make_dot(LL, params=dict(net.named_parameters()))))
+      out.close()
+      print("generated")
+      sys.exit()
+  # TODO Compute Perplexity 2^-Sum(p * log2(p))
+
 writer.close()
