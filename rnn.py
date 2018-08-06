@@ -98,15 +98,15 @@ class RNN(nn.Module):
 
       elif self.type == 'rnn-1':
         if self.condition == 'word':
-          h_t = F.softmax(x[:,:,t-1] + self.trans(h_tm1))
+          h_t = F.softmax(x[:,:,t-1] + self.trans(h_tm1), dim=-1)
         else:
-          h_t = F.softmax(zeros + self.trans(h_tm1))
+          h_t = F.softmax(zeros + self.trans(h_tm1), dim=-1)
 
       elif self.type == 'rnn-2':
         if self.condition == 'word':
-          h_t = x[:,:,t-1] * F.softmax(self.trans(h_tm1))
+          h_t = x[:,:,t-1] * F.softmax(self.trans(h_tm1), dim=-1)
         else:
-          h_t = F.softmax(self.trans(h_tm1))
+          h_t = F.softmax(self.trans(h_tm1), dim=-1)
 
       elif self.type == 'dist':
         # if h_t-1 is a distribution and multiply by transition matrix
