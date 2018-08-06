@@ -124,12 +124,18 @@ class RNN(nn.Module):
         else:
           h_t = F.tanh(zeros +  y_tm1 @ self.embedweight + b_h)
 
-      #elif self.type == 'elman': 
-      #  h_t = act(W_h x_t + U_h h_t-1 + b_h)  # (Jan) where is W_h?
-      #  if self.feeding == 'word':
-      #    h_t = F.tanh(x[:,:,t-1] + self.trans(h_tm1))
-      #  else:
-      #    h_t = F.tanh(zeros + self.trans(h_tm1))
+      elif self.type == 'elman': # Old implementation, should be ignored
+        # h_t = act(W_h x_t + U_h h_t-1 + b_h) # (Jan) where is W_h?
+        if self.condition == 'word':
+          h_t = F.tanh(x[:,:,t-1] + self.trans(h_tm1))
+        else:
+          h_t = F.tanh(zeros + self.trans(h_tm1))
+
+      elif self.type == 'rnn-1':
+        if self.condition == 'word':
+          h_t = F.softmax(x[:,:,t-1] + self.trans(h_tm1), dim=-1)
+        else:
+         h_t = F.softmax(zeros + self.trans(h_tm1), dim=-1)
 
       elif self.type == 'rnn-2':
         assert self.hidden_dim == self.embed_dim

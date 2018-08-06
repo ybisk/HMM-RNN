@@ -109,13 +109,7 @@ class HMM(nn.Module):
           tran = self.trans(x[:,:,t-1]).view(N, K, K)
           cur_alpha = pre_alpha.unsqueeze(-1).expand(N, K, K) + tran
           cur_alpha = U.log_sum_exp(cur_alpha, 1)
-          cur_alpha = F.log_softmax(cur_alpha, dim=1)
-          
-          # Yonatan version:  
-          #tran = self.trans(x[:,:,t-1]).view(N, K, K)
-          #pre_alpha = pre_alpha.unsqueeze(2)
-          #cur_alpha = F.log_softmax(tran @ pre_alpha, dim=-1)
-          #cur_alpha = cur_alpha.clone().squeeze()
+          cur_alpha = F.log_softmax(cur_alpha, dim=1).clone()
         else:
           tran = F.log_softmax(self.trans(x[:,:,t-1]).view(N, K, K), dim=-1)
           cur_alpha = pre_alpha.unsqueeze(-1).expand(N, K, K) + tran
