@@ -126,26 +126,24 @@ class RNN(nn.Module):
 
       elif self.type == 'elman': # Old implementation, should be ignored
         # h_t = act(W_h x_t + U_h h_t-1 + b_h) # (Jan) where is W_h?
-        if self.condition == 'word':
+        if self.feeding == 'word':
           h_t = F.tanh(x[:,:,t-1] + self.trans(h_tm1))
         else:
           h_t = F.tanh(zeros + self.trans(h_tm1))
 
       elif self.type == 'rnn-1':
-        if self.condition == 'word':
+        if self.feeding == 'word':
           h_t = F.softmax(x[:,:,t-1] + self.trans(h_tm1), dim=-1)
         else:
          h_t = F.softmax(zeros + self.trans(h_tm1), dim=-1)
 
       elif self.type == 'rnn-2':
-        assert self.hidden_dim == self.embed_dim
         if self.feeding == 'word': #TODO implement as cell (Jan) unclear
           h_t = x[:,:,t-1] * F.softmax(self.trans(h_tm1), dim=-1)
         else:
           h_t = F.softmax(self.trans(h_tm1), dim=-1)
 
       elif self.type == 'dist': #TODO implement as seperate cell
-        assert self.hidden_dim == self.embed_dim
         # if h_t-1 is a distribution and multiply by transition matrix
         K = self.embed_dim
         tran = F.log_softmax(self.trans(self.dummy).view(N, K, K), dim=-1)
