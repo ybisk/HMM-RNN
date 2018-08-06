@@ -24,9 +24,9 @@ parser = argparse.ArgumentParser(description='HMM-RNN')
 parser.add_argument('--batch-size', type=int, default=32, help='batch size')
 parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
 parser.add_argument('--max-len', type=int, default=20, help='max seq len')
-parser.add_argument('--hidden-dim', type=int, default=64, help='hidden dim')
-parser.add_argument('--clusters', type=int, default=64, help='num clusters')
-parser.add_argument('--condition', type=str, default='none',
+parser.add_argument('--hidden-dim', type=int, default=100, help='hidden dim (num clusters for HMM)')
+parser.add_argument('--embed-dim', type=int, default=100, help='embedding dim')
+parser.add_argument('--feeding', type=str, default='word',
                     help='none|word|lstm')
 parser.add_argument('--one-hot', action='store_true', default=False,
                     help='1-hot clusters')
@@ -49,12 +49,16 @@ fname = "{}".format(args.type)
 fname += ".{}".format(args.note) if len(args.note) > 0 else ""
 if args.one_hot:
   fname += "_1hot"
-fname += "_{}".format(args.condition)
+fname += "_{}".format(args.feeding)
 fname += "_l{}".format(args.max_len)
-if 'hmm' in args.type:
-  fname += "_c{}_h{}".format(args.clusters, args.hidden_dim)
+#if 'hmm' in args.type:
+#  fname += "_c{}_h{}".format(args.clusters, args.hidden_dim)
+fname += "_h{}".format(args.hidden_dim)
 if args.glove_emb:
-  fname += "_fixedE"
+  assert args.embed_dim == 100
+  fname += "_fixedE100"
+else:
+  fname += "_e{}".format(args.embed_dim)
 
 writer = SummaryWriter(args.log + fname)
 
@@ -65,6 +69,7 @@ def expand(text):
   return text[:args.max_len]
 
 #TODO (Jan): Do we have validation data?
+#TODO (Jan): Use a standard split and vocab such as Mikolov PTB
 tdata = pickle.load(gzip.open('data/train.freq.pkl.gz','rb'))
 voc2i = pickle.load(gzip.open('data/v2i.freq.pkl.gz','rb'))
 i2voc = pickle.load(gzip.open('data/i2v.freq.pkl.gz','rb'))
