@@ -35,7 +35,7 @@ class HMM(nn.Module):
     # Cluster vectors
     self.Cs = []
     for i in range(self.num_clusters):
-      self.Cs.append(torch.zeros(args.batch_size).long().to(self.device) + i) #TODO do without to(device)?
+      self.Cs.append(torch.zeros(args.batch_size).long().to(self.device) + i) 
 
     # Embed clusters
     self.one_hot = False
@@ -78,6 +78,8 @@ class HMM(nn.Module):
     # Embed
     x = self.embed_input(x)
 
+    # Initial state probabilities
+
     if self.feeding == 'none':
       tran = F.log_softmax(self.trans(self.dummy).view(N, K, K), dim=-1)
 
@@ -100,7 +102,7 @@ class HMM(nn.Module):
       # Transition
       if self.type == 'hmm-new':
          if self.feeding == 'none':
-           tran = self.trans(zero, pre_alpha)
+           tran = self.trans(zero, pre_alpha) #TODO alpha -> state
          else:
            tran = self.trans(x[:,:,t-1], pre_alpha)
 
@@ -120,11 +122,12 @@ class HMM(nn.Module):
       # self.Kr is the (full) range of clusters
       word_idx = w[:, t].unsqueeze(1).expand(N,K).unsqueeze(2)
       emit_prob = Emissions[:, self.Kr].gather(2, word_idx).squeeze()
-      cur_alpha[:, self.Kr] = cur_alpha[:, self.Kr] + emit_prob
 
       # Update
 
-      # TODO (Jan) I think we are missing a normalization and/or accummulation step (as in my equations)
+      # TODO (Jan) update to separate state and observed word probs 
+      cur_alpha[:, self.Kr] = cur_alpha[:, self.Kr] + emit_prob
+
       pre_alpha = cur_alpha.clone()
 
     return -1 * torch.mean(U.log_sum_exp(cur_alpha, dim=1))

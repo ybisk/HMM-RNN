@@ -16,7 +16,6 @@ class RNN(nn.Module):
     self.feeding = args.feeding 
     self.device = device
 
-    # self.Kr = torch.from_numpy(np.array(range(self.num_clusters))) #(Jan) ?
     self.dummy = torch.ones(args.batch_size, 1).to(device)
 
     # Embedding parameters
@@ -37,7 +36,7 @@ class RNN(nn.Module):
         nonlin = 'softmax'
       elif args.type == 'rnn-1a':
         nonlin = 'sigmoid'
-      else: #if args.type == 'elman':
+      else: # if args.type == 'elman':
         nonlin = 'tanh'
 
       self.trans = cell.ElmanCell(self.embed_dim, self.hidden_dim, nonlin, self.feeding != 'none')
@@ -118,7 +117,7 @@ class RNN(nn.Module):
       # Still in old implementation:
       elif self.type == 'jordan': #TODO (Jan) this definition is unclear to me
         # h_t = act(W_h x_t + U_h y_t-1 + b_h)
-        #TODO (Jan) don't understand @ notation
+        #TODO Jan doesn't understand @ notation
         if self.feeding == 'word':
           h_t = F.tanh(x[:,:,t-1] + y_tm1 @ self.embed.weight + b_h)
         else:
@@ -131,7 +130,7 @@ class RNN(nn.Module):
         else:
           h_t = F.tanh(zeros + self.trans(h_tm1))
 
-      elif self.type == 'rnn-1':
+      elif self.type == 'rnn-1': # Old implementation
         if self.feeding == 'word':
           h_t = F.softmax(x[:,:,t-1] + self.trans(h_tm1), dim=-1)
         else:

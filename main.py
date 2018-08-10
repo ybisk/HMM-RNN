@@ -110,6 +110,8 @@ for epoch in range(args.epochs):
   if 'hmm' in args.type:
     print_emissions(net, fname, i2voc)
 
+  #TODO implement truncated backprop with fixed length subsequences
+
   # Training
   inds = list(range(len(data)))
   random.shuffle(inds)
