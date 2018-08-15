@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import nn_utils as U
 import cell 
 
 class RNN(nn.Module):

@@ -94,7 +94,7 @@ if 'hmm' in args.type:
 else:  
   net = rnn.RNN(vocab_size, args, device).to(device)
 
-optimizer = torch.optim.Adam(net.parameters(), lr=1e-4)#, weight_decay=1e-3)
+optimizer = torch.optim.Adam(net.parameters(), lr=1e-4) #, weight_decay=1e-3)
 
 print("Starting Training")
 """
@@ -124,7 +124,7 @@ for epoch in range(args.epochs):
     net.train()
     LL = net(src)
 
-    loss = LL
+    loss = LL 
     loss.backward()
     optimizer.step()
 

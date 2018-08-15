@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import nn_utils as U
 import cell
 
 class HMM(nn.Module):
@@ -16,7 +15,7 @@ class HMM(nn.Module):
     self.feeding = args.feeding
     self.device = device
 
-    self.Kr = torch.from_numpy(np.array(range(self.num_clusters)))
+    #self.Kr = torch.from_numpy(np.array(range(self.num_clusters)))
     self.dummy = torch.ones(args.batch_size, 1).to(device)
 
     # Input embedding parameters
@@ -96,7 +95,7 @@ class HMM(nn.Module):
     Emissions = torch.stack([
         F.log_softmax(self.emit(self.emb_cluster(self.Cs[i])), -1)
         for i in range(K)])
-    Emissions = Emissions.transpose(0, 1)    # Move batch to the front
+    Emissions = Emissions.transpose(0, 1).clone()  # Move batch to the front
 
     for t in range(1, T):
       # Transition
@@ -110,27 +109,27 @@ class HMM(nn.Module):
         if self.type == 'hmm+1':
           tran = self.trans(x[:,:,t-1]).view(N, K, K)
           cur_alpha = pre_alpha.unsqueeze(-1).expand(N, K, K) + tran
-          cur_alpha = U.log_sum_exp(cur_alpha, 1)
+          cur_alpha = torch.logsumexp(cur_alpha, 1)
           cur_alpha = F.log_softmax(cur_alpha, dim=1).clone()
         else:
           tran = F.log_softmax(self.trans(x[:,:,t-1]).view(N, K, K), dim=-1)
           cur_alpha = pre_alpha.unsqueeze(-1).expand(N, K, K) + tran
-          cur_alpha = U.log_sum_exp(cur_alpha, 1)
+          cur_alpha = torch.logsumexp(cur_alpha, 1)
 
       # Emission
 
       # self.Kr is the (full) range of clusters
       word_idx = w[:, t].unsqueeze(1).expand(N,K).unsqueeze(2)
-      emit_prob = Emissions[:, self.Kr].gather(2, word_idx).squeeze()
+      emit_prob = Emissions.gather(2, word_idx).squeeze()
 
       # Update
 
       # TODO (Jan) update to separate state and observed word probs 
-      cur_alpha[:, self.Kr] = cur_alpha[:, self.Kr] + emit_prob
+      cur_alpha = cur_alpha + emit_prob
 
       pre_alpha = cur_alpha.clone()
 
-    return -1 * torch.mean(U.log_sum_exp(cur_alpha, dim=1))
+    return -1 * torch.mean(torch.logsumexp(cur_alpha, dim=1))
 
   def emissions_list(self, index):
     V = F.log_softmax(self.emit(self.emb_cluster(self.Cs[index])), dim=-1)

@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import nn_utils as U
-
 class ElmanCell(nn.Module):
   def __init__(self, input_dim, hidden_dim, nonlin='tanh', feed_input=True,
         trans_use_input_dim=False, trans_only_nonlin=False):
@@ -24,11 +22,11 @@ class ElmanCell(nn.Module):
   def apply_nonlin(self, state):
     # non-linearity (default is none)
     if self.nonlin == 'tanh':
-      new_state = F.tanh(state)
+      new_state = torch.tanh(state)
     elif self.nonlin == 'softmax':
       new_state = F.softmax(state, dim=-1)
     elif self.nonlin == 'sigmoid':
-      new_state = F.sigmoid(state)
+      new_state = torch.sigmoid(state)
     else:
       new_state = state
     return new_state
@@ -71,7 +69,7 @@ class HMMCell(nn.Module):
     transition_distr = F.log_softmax(transition_distr, dim=-1) # double check dimension
 
     new_state = transition_distr + state.unsqueeze(-1).expand(batch_size, self.hidden_dim, self.hidden_dim)
-    new_state = U.log_sum_exp(new_state, 1) # dim batch_size x hidden_dim
+    new_state = torch.logsumexp(new_state, 1) # dim batch_size x hidden_dim
 
     return new_state
 
