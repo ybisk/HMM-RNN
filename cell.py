@@ -5,29 +5,56 @@ import torch.nn.functional as F
 import nn_utils as U
 
 class ElmanCell(nn.Module):
-  def __init__(self, input_dim, hidden_dim, nonlin='tanh', feed_input=True):
+  def __init__(self, input_dim, hidden_dim, nonlin='tanh', feed_input=True,
+        trans_use_input_dim=False, trans_only_nonlin=False):
     super(ElmanCell, self).__init__()
     self.input_dim = input_dim
     self.hidden_dim = hidden_dim
-    self.feed_input = feed_input
     self.nonlin = nonlin
+    self.feed_input = feed_input
+    self.trans_use_input_dim = trans_use_input_dim
+    self.trans_only_nonlin = trans_only_nonlin
 
-    self.input_tr = nn.Linear(self.input_dim, self.hidden_dim) # TODO bias?
-    self.transition = nn.Linear(self.hidden_dim, self.hidden_dim, bias=True)
+    self.input_tr = nn.Linear(self.input_dim, self.hidden_dim,
+                              bias=trans_only_nonlin)
+
+    if trans_use_input_dim:
+      assert input_dim == hidden_dim #TODO temp
+    tr_input_dim = input_dim if trans_use_input_dim else hidden_dim
+    self.transition = nn.Linear(tr_input_dim, self.hidden_dim, bias=True)
+
+  def apply_nonlin(self, state):
+    # non-linearity (default is none)
+    if self.nonlin == 'tanh':
+      new_state = F.tanh(state)
+    elif self.nonlin == 'softmax':
+      new_state = F.softmax(state, dim=-1)
+    elif self.nonlin == 'sigmoid':
+      new_state = F.sigmoid(state)
+    else:
+      new_state = state # clone?
+    return state
 
   def forward(self, inp, state):
+    if self.trans_use_input_dim: #TODO temp
+      new_state = state + inp
+      new_state = self.apply_nonlin(new_state)
+      return new_state
+
     new_state = self.transition(state)
-    if self.feed_input:
-      new_state += self.input_tr(inp)
-    if self.nonlin == 'tanh':
-      new_state = F.tanh(new_state)
-    elif self.nonlin == 'softmax':
-      new_state = F.softmax(new_state, dim=-1)
-    elif self.nonlin == 'sigmoid':
-      new_state = F.sigmoid(new_state)
-    # default is no non-linearity
+
+    if self.trans_only_nonlin:
+      new_state = self.apply_nonlin(new_state)
+      if self.feed_input: #TODO in Yonatan's formulation this is element-wise multiply
+        new_state += self.input_tr(inp) #TODO use bias here?
+        # new_state = self.input_tr(inp) * new_state
+    else:
+      if self.feed_input:
+        new_state += self.input_tr(inp)
+      new_state = self.apply_nonlin(new_state)
 
     return new_state
+
 
 class HMMCell(nn.Module):
   def __init__(self, input_dim, hidden_dim, feed_input=True):

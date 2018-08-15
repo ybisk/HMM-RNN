@@ -30,39 +30,31 @@ class RNN(nn.Module):
 
     # Transition parameters
 
-    if args.type == 'elman' or self.type == 'rnn-1' or self.type == 'rnn-1a': 
+    if args.type == 'elman' or args.type == 'jordan' or 'rnn' in args.type:
       # new implementation
-      if args.type == 'rnn-1':
+      if args.type == 'rnn-1' or args.type == 'rnn-2': #TODO test other nonlins with rnn-2
         nonlin = 'softmax'
       elif args.type == 'rnn-1a':
         nonlin = 'sigmoid'
-      else: # if args.type == 'elman':
+      else: 
         nonlin = 'tanh'
 
-      self.trans = cell.ElmanCell(self.embed_dim, self.hidden_dim, nonlin, self.feeding != 'none')
+      self.trans = cell.ElmanCell(self.embed_dim, self.hidden_dim, nonlin,
+          feed_input = (self.feeding != 'none'), 
+          trans_use_input_dim = (args.type == 'elman'),
+          trans_only_nonlin = (args.type == 'rnn-2'))
     elif args.type == 'gru':
       self.trans = nn.GRUCell(self.embed_dim, self.hidden_dim)
     elif args.type == 'lstm':
       self.trans = nn.LSTMCell(self.embed_dim, self.hidden_dim)
-
-    # still old implementation
-    elif args.type == 'jordan':
-      self.b_h = nn.Linear(1, self.embed_dim)
-      self.start_1hot = torch.zeros(1, vocab_size).to(device)
-      #self.start_1hot[0, START] = 1   #TODO is start first symbol in input seq? should not use here
-      self.start_1hot.requires_grad = False
-
-    elif args.type == 'rnn-2':
-      self.trans = nn.Linear(self.embed_dim, self.hidden_dim)
-
-    elif args.type == 'dist':  #TODO (Jan) unclear
-      self.trans = nn.Linear(1, self.embed_dim**2, bias=False)
-      self.trans.weight.data.uniform_(-1, 1)
-
     else: 
-      # if args.type == 'ran':
       print(args.type + " is not implemented")
       sys.exit()
+
+    if args.type == 'jordan':
+      self.start_1hot = torch.zeros(1, vocab_size).to(device)
+      self.start_1hot[0, 0] = 1 #TODO use START symbol index
+      self.start_1hot.requires_grad = False
 
     # Emission parameters
     self.emit = nn.Linear(self.hidden_dim, vocab_size, bias=True)    # f(cluster, word)
@@ -92,71 +84,39 @@ class RNN(nn.Module):
       c_tm1 = torch.zeros(N, self.hidden_dim).to(self.device)
 
     if self.type == 'jordan':
-      b_h = self.b_h(self.dummy)
-      y_tm1 = self.start_1hot.expand(N, self.vocab_size)   # One hot start
+      y_t = self.start_1hot.expand(N, self.vocab_size) # One hot start
+      h_tm1 = y_t @ self.embed.weight 
 
     for t in range(1, T):
+      inp = zero if self.feeding == 'none' else x[:,:,t-1] 
 
-      if self.type == 'elman' or self.type == 'rnn-1' or self.type == 'rnn-1a': 
-        h_t = self.trans(x[:,:,t-1], h_tm1)
-
-      elif self.type == 'gru':
-        if self.feeding == 'word':
-          h_t = self.trans(x[:,:,t-1], h_tm1)
-        else:
-          h_t = self.trans(zeros, h_tm1)
-
-      elif self.type == 'lstm': #TODO (Jan) do we need to store c_tm1 seperately?
-        if self.feeding == 'word':
-          h_t, c_t = self.trans(x[:,:,t-1], (h_tm1, c_tm1))
-          c_tm1 = c_t.clone()
-        else:
-          h_t, c_t = self.trans(zeros, (h_tm1, c_tm1))
-          c_tm1 = c_t.clone()
-
-      # Still in old implementation:
-      elif self.type == 'jordan': #TODO (Jan) this definition is unclear to me
-        # h_t = act(W_h x_t + U_h y_t-1 + b_h)
-        #TODO Jan doesn't understand @ notation
-        if self.feeding == 'word':
-          h_t = F.tanh(x[:,:,t-1] + y_tm1 @ self.embed.weight + b_h)
-        else:
-          h_t = F.tanh(zeros +  y_tm1 @ self.embedweight + b_h)
-
-      elif self.type == 'elman': # Old implementation, should be ignored
-        # h_t = act(W_h x_t + U_h h_t-1 + b_h) # (Jan) where is W_h?
-        if self.feeding == 'word':
-          h_t = F.tanh(x[:,:,t-1] + self.trans(h_tm1))
-        else:
-          h_t = F.tanh(zeros + self.trans(h_tm1))
-
-      elif self.type == 'rnn-1': # Old implementation
-        if self.feeding == 'word':
-          h_t = F.softmax(x[:,:,t-1] + self.trans(h_tm1), dim=-1)
-        else:
-         h_t = F.softmax(zeros + self.trans(h_tm1), dim=-1)
-
-      elif self.type == 'rnn-2':
-        if self.feeding == 'word': #TODO implement as cell (Jan) unclear
-          h_t = x[:,:,t-1] * F.softmax(self.trans(h_tm1), dim=-1)
-        else:
-          h_t = F.softmax(self.trans(h_tm1), dim=-1)
-
-      elif self.type == 'dist': #TODO implement as seperate cell
-        # if h_t-1 is a distribution and multiply by transition matrix
-        K = self.embed_dim
-        tran = F.log_softmax(self.trans(self.dummy).view(N, K, K), dim=-1)
-        h_t = h_tm1.unsqueeze(1).expand(N, K, K) + tran
-        h_t = U.log_sum_exp(h_t, 1)
+      if self.type == 'lstm':
+        h_t, c_t = self.trans(inp, (h_tm1, c_tm1))
+        c_tm1 = c_t.clone()
+      else:
+        h_t = self.trans(inp, h_tm1)
 
       # y_t = act(W_y h_t + b_y)
-      y_t = F.log_softmax(self.emit(h_t), -1)        # Emission
+      logits_t = self.emit(h_t)
+      y_t = F.log_softmax(logits_t, -1)        # Emission
 
+      # print(logits_t)
       word_idx = w[:, t].unsqueeze(1)
-      cur_alpha += y_t.gather(1, word_idx).squeeze()           # Word Prob
+      x_t = y_t.gather(1, word_idx).squeeze()           # Word Prob
+      cur_alpha += x_t
 
       y_tm1 = y_t.clone()
-      h_tm1 = h_t.clone() # (Jan) why are we cloning here?
+
+      if self.type == 'jordan':
+        # h_t = act(W_h x_t + U_h y_t-1 + b_h)
+        #TODO why use log probabilities?
+        # Replace hidden state so that other computations are equivalent to Elman
+
+        #TODO getting overflow error (loss nan; inf when logits used instead) here
+        h_tm1 = y_tm1 @ self.embed.weight 
+        #h_tm1 = logits_t @ self.embed.weight 
+      else:
+        h_tm1 = h_t.clone() # (Jan) why are we cloning here?
     return -1 * torch.mean(cur_alpha)
 
 
