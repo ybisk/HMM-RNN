@@ -27,7 +27,7 @@ parser.add_argument('--max-len', type=int, default=20, help='max seq len')
 parser.add_argument('--hidden-dim', type=int, default=100, help='hidden dim (num clusters for HMM)')
 parser.add_argument('--embed-dim', type=int, default=100, help='embedding dim')
 parser.add_argument('--feeding', type=str, default='word',
-                    help='none|word|lstm')
+                    help='none|word|encode-lstm')
 parser.add_argument('--one-hot', action='store_true', default=False,
                     help='1-hot clusters')
 parser.add_argument('--glove-emb', action='store_true', default=False,
@@ -117,25 +117,28 @@ for epoch in range(args.epochs):
   random.shuffle(inds)
   iterate = tqdm.tqdm(range(0, len(inds) - len(inds)%args.batch_size, args.batch_size), ncols=80)
   for i in iterate:
-    r = inds[i:i + args.batch_size]
-    src = torch.from_numpy(data[r]).to(device)
+    data_range = inds[i:i + args.batch_size]
+    data_tensor = torch.from_numpy(data[data_range]).to(device)
 
     optimizer.zero_grad()
-    net.train()
-    LL = net(src)
+    net.train() 
+    
+    #TODO carry over hidden state between batches
+    hidden_state = net.init_hidden_state(args.batch_size) 
+    word_marginals, hidden_state = net(data_tensor, hidden_state)
 
-    loss = LL 
+    loss = -1 * torch.mean(word_marginals)
     loss.backward()
     optimizer.step()
 
-    iterate.set_description("Loss {:8.4f}".format(LL.item()))
+    iterate.set_description("Loss {:8.4f}".format(loss.item()))
 
     step += 1
-    writer.add_scalar('Loss', LL.item(), step)
+    writer.add_scalar('Loss', loss.item(), step)
 
     if args.write_graph:
       out = open("graph.dot",'w')
-      out.write(str(make_dot(LL, params=dict(net.named_parameters()))))
+      out.write(str(make_dot(loss, params=dict(net.named_parameters()))))
       out.close()
       print("generated")
       sys.exit()

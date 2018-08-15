@@ -14,6 +14,7 @@ class RNN(nn.Module):
     self.type = args.type
     self.feeding = args.feeding 
     self.device = device
+    self.glove_emb = args.glove_emb
 
     self.dummy = torch.ones(args.batch_size, 1).to(device)
 
@@ -36,11 +37,15 @@ class RNN(nn.Module):
         nonlin = 'sigmoid'
       else: 
         nonlin = 'tanh'
-
       self.trans = cell.ElmanCell(self.embed_dim, self.hidden_dim, nonlin,
           feed_input = (self.feeding != 'none'), 
-          trans_use_input_dim = (args.type == 'jordan'),
           trans_only_nonlin = (args.type == 'rnn-2'))
+
+    elif args.type == 'jordan':
+      nonlin = 'tanh'
+      self.trans = cell.JordanCell(self.embed_dim, self.hidden_dim, nonlin,
+          feed_input = (self.feeding != 'none'))
+
     elif args.type == 'gru':
       self.trans = nn.GRUCell(self.embed_dim, self.hidden_dim)
     elif args.type == 'lstm':
@@ -49,68 +54,87 @@ class RNN(nn.Module):
       print(args.type + " is not implemented")
       sys.exit()
 
-    if args.type == 'jordan':
-      self.start_1hot = torch.zeros(1, vocab_size).to(device)
-      # self.start_1hot[0, 0] = START #TODO use START symbol index
-      self.start_1hot.requires_grad = False
-
     # Emission parameters
     self.emit = nn.Linear(self.hidden_dim, vocab_size, bias=True)    # f(cluster, word)
-    self.emit.weight.data.uniform_(-1, 1)                           # Otherwise root(V) is huge
 
-  def embed_input(self, x):
-    embed_x = self.embed(x)
+    self.init_weights()
+
+  def init_weights(self, initrange=1.0):
+    self.emit.weight.data.uniform_(-initrange, initrange)    # Otherwise root(V) is huge
+    self.emit.bias.data.zero_()
+    if not self.glove_emb:
+      self.embed.weight.data.uniform_(-initrange, initrange) 
+
+  def init_hidden_state(self, batch_size):
+    weight = next(self.parameters())
+    if self.type == 'lstm':
+      return (weight.new_zeros(batch_size, self.hidden_dim),
+              weight.new_zeros(batch_size, self.hidden_dim))
+    elif self.type == 'jordan': 
+      return weight.new_zeros(batch_size, self.vocab_size)
+    else:
+      return weight.new_zeros(batch_size, self.hidden_dim)
+
+  def embed_input(self, words):
+    emb = self.embed(words)
     if 'encode' in self.feeding:
-      embed_x, _ = self.encode_context(embed_x)
-    return embed_x.permute(0, 2, 1) # batch_size x embed_dim x seq_length 
+      emb, _ = self.encode_context(embed)
+    return emb.permute(0, 2, 1) # batch_size x embed_dim x seq_length 
 
-  def forward(self, x):
-    w = x.clone()
-    N = x.size()[0] # batch size
-    T = w.size()[1] # sequence length
+  def forward(self, words, hidden_state):
+    N = words.size()[0] # batch size
+    T = words.size()[1] # sequence length
 
-    #TODO find better ways of dealing with zeros
-    #TODO (Jan) implement proper hidden state initialization
-    cur_alpha = torch.zeros(N).to(self.device)
-    zeros = torch.zeros(N, self.embed_dim).to(self.device)
-    h_tm1 = torch.zeros(N, self.hidden_dim).to(self.device)
+    word_marginals = None
+    zero_emb = torch.zeros(N, self.embed_dim).to(self.device) #TODO check for my cells
 
     # Embed
-    x = self.embed_input(x)
-
-    if self.type == 'lstm':
-      c_tm1 = torch.zeros(N, self.hidden_dim).to(self.device)
+    emb = self.embed_input(words)
 
     if self.type == 'jordan':
-      y_tm1 = self.start_1hot.expand(N, self.vocab_size)   # One hot start
-      h_tm1 = y_tm1 @ self.embed.weight 
+      # Initialize one hot
+      hidden_state.scatter_(1, words[:,0].view(N, 1), 1)
 
     for t in range(1, T):
-      inp = zero if self.feeding == 'none' else x[:,:,t-1] 
+      #TODO feeding is none doesn't make sense for RNNs, so why bother?
+      state_input = zero_emb if self.feeding == 'none' else emb[:,:,t-1] 
 
+      # Transition
       if self.type == 'lstm':
-        h_t, c_t = self.trans(inp, (h_tm1, c_tm1))
+        hidden_output, hidden_memcell = self.trans(state_input, hidden_state)
         c_tm1 = c_t.clone()
-      else:
-        h_t = self.trans(inp, h_tm1)
+      elif self.type == 'jordan':
+        # h_t = act(W_h x_t + U_h y_t-1 + b_h)
+        #TODO move to cell if we can tie weights
+        hidden_input_state = hidden_state @ self.embed.weight
+        hidden_output = self.trans(state_input, hidden_input_state)
+      else:  
+        hidden_output = self.trans(state_input, hidden_state)
+
+      # Emit
 
       # y_t = act(W_y h_t + b_y)
-      logits_t = self.emit(h_t)
-      y_t = F.log_softmax(logits_t, -1)        # Emission
+      logits = self.emit(hidden_output)
+      emit_distr = F.log_softmax(logits, -1)        # Emission
 
-      # print(logits_t)
-      word_idx = w[:, t].unsqueeze(1)
-      x_t = y_t.gather(1, word_idx).squeeze()           # Word Prob
-      cur_alpha += x_t
+      word_idx = words[:, t].unsqueeze(1)
+      word_ll = emit_distr.gather(1, word_idx).squeeze()           # Word Prob
 
-      y_tm1 = y_t.clone()
-
-      if self.type == 'jordan':
-        # h_t = act(W_h x_t + U_h y_t-1 + b_h)
-        # Replace hidden state so that other computations are equivalent to Elman
-        h_tm1 = y_tm1 @ self.embed.weight #TODO why use log probabilities?
+      # State Update
+      #TODO do we need to clone here?
+      if self.type == 'lstm':
+        hidden_state = (hidden_output.clone(), hidden_memcell.clone())
+      elif self.type == 'jordan':
+        #hidden_state = emit_distr.clone() #TODO why use log probabilities?
+        hidden_state = F.softmax(logits, -1)
       else:
-        h_tm1 = h_t.clone() # (Jan) why are we cloning here?
-    return -1 * torch.mean(cur_alpha)
+        hidden_state = hidden_output.clone() 
 
+      # Accumulate
+      if t == 1:
+        word_marginals = word_ll
+      else:
+        word_marginals = word_marginals + word_ll
+
+    return word_marginals, hidden_state
 
