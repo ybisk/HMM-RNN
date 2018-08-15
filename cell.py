@@ -18,8 +18,6 @@ class ElmanCell(nn.Module):
     self.input_tr = nn.Linear(self.input_dim, self.hidden_dim,
                               bias=trans_only_nonlin)
 
-    if trans_use_input_dim:
-      assert input_dim == hidden_dim #TODO temp
     tr_input_dim = input_dim if trans_use_input_dim else hidden_dim
     self.transition = nn.Linear(tr_input_dim, self.hidden_dim, bias=True)
 
@@ -32,15 +30,10 @@ class ElmanCell(nn.Module):
     elif self.nonlin == 'sigmoid':
       new_state = F.sigmoid(state)
     else:
-      new_state = state # clone?
-    return state
+      new_state = state
+    return new_state
 
   def forward(self, inp, state):
-    if self.trans_use_input_dim: #TODO temp
-      new_state = state + inp
-      new_state = self.apply_nonlin(new_state)
-      return new_state
-
     new_state = self.transition(state)
 
     if self.trans_only_nonlin:

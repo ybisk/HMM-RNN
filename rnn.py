@@ -28,11 +28,10 @@ class RNN(nn.Module):
     if args.feeding == 'encode-lstm':
       self.encode_context = nn.LSTM(self.embed_dim, self.embed_dim, batch_first=True)
 
-    # Transition parameters
+    # Transition cell
 
     if args.type == 'elman' or args.type == 'jordan' or 'rnn' in args.type:
-      # new implementation
-      if args.type == 'rnn-1' or args.type == 'rnn-2': #TODO test other nonlins with rnn-2
+      if args.type == 'rnn-1' or args.type == 'rnn-2': 
         nonlin = 'softmax'
       elif args.type == 'rnn-1a':
         nonlin = 'sigmoid'
@@ -41,7 +40,7 @@ class RNN(nn.Module):
 
       self.trans = cell.ElmanCell(self.embed_dim, self.hidden_dim, nonlin,
           feed_input = (self.feeding != 'none'), 
-          trans_use_input_dim = (args.type == 'elman'),
+          trans_use_input_dim = (args.type == 'jordan'),
           trans_only_nonlin = (args.type == 'rnn-2'))
     elif args.type == 'gru':
       self.trans = nn.GRUCell(self.embed_dim, self.hidden_dim)
@@ -53,7 +52,7 @@ class RNN(nn.Module):
 
     if args.type == 'jordan':
       self.start_1hot = torch.zeros(1, vocab_size).to(device)
-      self.start_1hot[0, 0] = 1 #TODO use START symbol index
+      # self.start_1hot[0, 0] = START #TODO use START symbol index
       self.start_1hot.requires_grad = False
 
     # Emission parameters
@@ -84,8 +83,8 @@ class RNN(nn.Module):
       c_tm1 = torch.zeros(N, self.hidden_dim).to(self.device)
 
     if self.type == 'jordan':
-      y_t = self.start_1hot.expand(N, self.vocab_size) # One hot start
-      h_tm1 = y_t @ self.embed.weight 
+      y_tm1 = self.start_1hot.expand(N, self.vocab_size)   # One hot start
+      h_tm1 = y_tm1 @ self.embed.weight 
 
     for t in range(1, T):
       inp = zero if self.feeding == 'none' else x[:,:,t-1] 
@@ -109,12 +108,8 @@ class RNN(nn.Module):
 
       if self.type == 'jordan':
         # h_t = act(W_h x_t + U_h y_t-1 + b_h)
-        #TODO why use log probabilities?
         # Replace hidden state so that other computations are equivalent to Elman
-
-        #TODO getting overflow error (loss nan; inf when logits used instead) here
-        h_tm1 = y_tm1 @ self.embed.weight 
-        #h_tm1 = logits_t @ self.embed.weight 
+        h_tm1 = y_tm1 @ self.embed.weight #TODO why use log probabilities?
       else:
         h_tm1 = h_t.clone() # (Jan) why are we cloning here?
     return -1 * torch.mean(cur_alpha)
