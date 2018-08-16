@@ -6,19 +6,16 @@ import torch.nn.functional as F
 import cell 
 
 class RNN(nn.Module):
-  def __init__(self, vocab_size, args, device):
+  def __init__(self, vocab_size, args):
     super(RNN, self).__init__()
     self.hidden_dim = args.hidden_dim
     self.embed_dim = args.embed_dim
     self.vocab_size = vocab_size
     self.type = args.type
     self.feeding = args.feeding 
-    self.device = device
     self.glove_emb = args.glove_emb
 
-    self.dummy = torch.ones(args.batch_size, 1).to(device)
-
-    # Embedding parameters
+    # Input embedding parameters
     self.embed = nn.Embedding(vocab_size, self.embed_dim)
     if args.glove_emb:
       self.embed.weight.data.copy_(
@@ -30,7 +27,7 @@ class RNN(nn.Module):
 
     # Transition cell
 
-    if args.type == 'elman' or args.type == 'jordan' or 'rnn' in args.type:
+    if args.type == 'elman' or 'rnn' in args.type:
       if args.type == 'rnn-1' or args.type == 'rnn-2': 
         nonlin = 'softmax'
       elif args.type == 'rnn-1a':
@@ -40,12 +37,10 @@ class RNN(nn.Module):
       self.trans = cell.ElmanCell(self.embed_dim, self.hidden_dim, nonlin,
           feed_input = (self.feeding != 'none'), 
           trans_only_nonlin = (args.type == 'rnn-2'))
-
     elif args.type == 'jordan':
       nonlin = 'tanh'
       self.trans = cell.JordanCell(self.embed_dim, self.hidden_dim, nonlin,
           feed_input = (self.feeding != 'none'))
-
     elif args.type == 'gru':
       self.trans = nn.GRUCell(self.embed_dim, self.hidden_dim)
     elif args.type == 'lstm':
@@ -55,7 +50,7 @@ class RNN(nn.Module):
       sys.exit()
 
     # Emission parameters
-    self.emit = nn.Linear(self.hidden_dim, vocab_size, bias=True)    # f(cluster, word)
+    self.emit = nn.Linear(self.hidden_dim, vocab_size, bias=True) 
 
     self.init_weights()
 
@@ -65,15 +60,18 @@ class RNN(nn.Module):
     if not self.glove_emb:
       self.embed.weight.data.uniform_(-initrange, initrange) 
 
-  def init_hidden_state(self, batch_size):
+  def init_hidden_state(self, batch_size, inp=None):
     weight = next(self.parameters())
+    if self.type == 'jordan':
+      assert inp is not None
+      state = weight.new_zeros((batch_size, self.vocab_size))
+      state.scatter_(1, inp.view(batch_size, 1), 1)
+      return state
     if self.type == 'lstm':
-      return (weight.new_zeros(batch_size, self.hidden_dim),
-              weight.new_zeros(batch_size, self.hidden_dim))
-    elif self.type == 'jordan': 
-      return weight.new_zeros(batch_size, self.vocab_size)
+      return (weight.new_zeros((batch_size, self.hidden_dim)),
+              weight.new_zeros((batch_size, self.hidden_dim)))
     else:
-      return weight.new_zeros(batch_size, self.hidden_dim)
+      return weight.new_zeros((batch_size, self.hidden_dim))
 
   def embed_input(self, words):
     emb = self.embed(words)
@@ -84,25 +82,21 @@ class RNN(nn.Module):
   def forward(self, words, hidden_state):
     N = words.size()[0] # batch size
     T = words.size()[1] # sequence length
+    emit_marginal = None
 
-    word_marginals = None
-    zero_emb = torch.zeros(N, self.embed_dim).to(self.device) #TODO check for my cells
+    # feeding is none doesn't make sense for RNNs, so why bother for LSTM/GRU?
+    if self.type == 'lstm' or self.type == 'gru':
+      assert self.feeding != 'none'
 
     # Embed
     emb = self.embed_input(words)
 
-    if self.type == 'jordan':
-      # Initialize one hot
-      hidden_state.scatter_(1, words[:,0].view(N, 1), 1)
-
     for t in range(1, T):
-      #TODO feeding is none doesn't make sense for RNNs, so why bother?
-      state_input = zero_emb if self.feeding == 'none' else emb[:,:,t-1] 
+      state_input = emb[:,:,t-1] 
 
       # Transition
       if self.type == 'lstm':
         hidden_output, hidden_memcell = self.trans(state_input, hidden_state)
-        c_tm1 = c_t.clone()
       elif self.type == 'jordan':
         # h_t = act(W_h x_t + U_h y_t-1 + b_h)
         #TODO move to cell if we can tie weights
@@ -118,23 +112,22 @@ class RNN(nn.Module):
       emit_distr = F.log_softmax(logits, -1)        # Emission
 
       word_idx = words[:, t].unsqueeze(1)
-      word_ll = emit_distr.gather(1, word_idx).squeeze()           # Word Prob
+      emit_ll = emit_distr.gather(1, word_idx).squeeze()           # Word Prob
 
       # State Update
       #TODO do we need to clone here?
       if self.type == 'lstm':
         hidden_state = (hidden_output.clone(), hidden_memcell.clone())
       elif self.type == 'jordan':
-        #hidden_state = emit_distr.clone() #TODO why use log probabilities?
         hidden_state = F.softmax(logits, -1)
       else:
         hidden_state = hidden_output.clone() 
 
       # Accumulate
       if t == 1:
-        word_marginals = word_ll
+        emit_marginal = emit_ll
       else:
-        word_marginals = word_marginals + word_ll
+        emit_marginal = emit_marginal + emit_ll
 
-    return word_marginals, hidden_state
+    return emit_marginal, hidden_state
 

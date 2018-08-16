@@ -10,9 +10,9 @@ import rnn
 
 def print_emissions(net, fname, i2voc):
   o = open("Emissions.{}.txt".format(fname),'w')
-  for i in range(net.num_clusters):
-    e_list = net.emissions_list(i)
-    listed = [(e_list[j], str(i2voc[j])) for j in range(net.vocab_size)]
+  e_list = net.emissions_list()
+  for i in range(net.hidden_dim):
+    listed = [(float(e_list[j][i]), str(i2voc[j])) for j in range(net.vocab_size)]
     listed.sort()
     listed.reverse()
     o.write("\n%d\n" % i)
@@ -68,8 +68,7 @@ def expand(text):
     text.append(NONE)
   return text[:args.max_len]
 
-#TODO (Jan): Do we have validation data?
-#TODO (Jan): Use a standard split and vocab such as Mikolov PTB
+#TODO (Jan): Use Mikolov PTB
 tdata = pickle.load(gzip.open('data/train.freq.pkl.gz','rb'))
 voc2i = pickle.load(gzip.open('data/v2i.freq.pkl.gz','rb'))
 i2voc = pickle.load(gzip.open('data/i2v.freq.pkl.gz','rb'))
@@ -90,9 +89,9 @@ def to_string(seq):
 vocab_size = len(voc2i)
 
 if 'hmm' in args.type:
-  net = hmm.HMM(vocab_size, args, device).to(device)
+  net = hmm.HMM(vocab_size, args).to(device)
 else:  
-  net = rnn.RNN(vocab_size, args, device).to(device)
+  net = rnn.RNN(vocab_size, args).to(device)
 
 optimizer = torch.optim.Adam(net.parameters(), lr=1e-4) #, weight_decay=1e-3)
 
@@ -107,6 +106,7 @@ step = 0
 for epoch in range(args.epochs):
 
   # Print # Training
+  print("Epoch %d" % epoch)
   if 'hmm' in args.type:
     print_emissions(net, fname, i2voc)
 
@@ -124,10 +124,14 @@ for epoch in range(args.epochs):
     net.train() 
     
     #TODO carry over hidden state between batches
-    hidden_state = net.init_hidden_state(args.batch_size) 
-    word_marginals, hidden_state = net(data_tensor, hidden_state)
+    if args.type == 'jordan':
+      hidden_state = net.init_hidden_state(args.batch_size, data_tensor[:,0]) 
+    else:
+      hidden_state = net.init_hidden_state(args.batch_size) 
+    
+    emit_marginal, hidden_state = net(data_tensor, hidden_state)
 
-    loss = -1 * torch.mean(word_marginals)
+    loss = -1 * torch.mean(emit_marginal)
     loss.backward()
     optimizer.step()
 
@@ -136,12 +140,14 @@ for epoch in range(args.epochs):
     step += 1
     writer.add_scalar('Loss', loss.item(), step)
 
+    #TODO compute loss on validation data
+    #TODO Compute Perplexity 2^-Sum(p * log2(p))
+
     if args.write_graph:
       out = open("graph.dot",'w')
       out.write(str(make_dot(loss, params=dict(net.named_parameters()))))
       out.close()
       print("generated")
       sys.exit()
-  # TODO Compute Perplexity 2^-Sum(p * log2(p))
 
 writer.close()

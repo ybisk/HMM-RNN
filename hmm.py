@@ -6,17 +6,14 @@ import torch.nn.functional as F
 import cell
 
 class HMM(nn.Module):
-  def __init__(self, vocab_size, args, device):
+  def __init__(self, vocab_size, args):
     super(HMM, self).__init__()
     self.embed_dim = args.embed_dim
     self.vocab_size = vocab_size
-    self.num_clusters = args.hidden_dim
+    self.hidden_dim = args.hidden_dim
     self.type = args.type
     self.feeding = args.feeding
-    self.device = device
-
-    #self.Kr = torch.from_numpy(np.array(range(self.num_clusters)))
-    self.dummy = torch.ones(args.batch_size, 1).to(device)
+    self.glove_emb = args.glove_emb
 
     # Input embedding parameters
     self.embed = nn.Embedding(vocab_size, self.embed_dim)
@@ -28,39 +25,30 @@ class HMM(nn.Module):
     if args.feeding == 'encode-lstm':
       self.encode_context = nn.LSTM(self.embed_dim, self.embed_dim, batch_first=True)
 
-    # Transition parameters
-  
-    #TODO (Jan) not clear about this part
-    # Cluster vectors
-    self.Cs = []
-    for i in range(self.num_clusters):
-      self.Cs.append(torch.zeros(args.batch_size).long().to(self.device) + i) 
-
-    # Embed clusters
-    self.one_hot = False
-    if self.one_hot:  # (Jan) ?
-      self.emb_cluster = nn.embedding(self.num_clusters, self.num_clusters)
-      self.emb_cluster.weight.data = torch.eye(self.num_clusters)
-      self.emb_cluster.requires_grad = False
-    else:
-      self.emb_cluster = nn.Embedding(self.num_clusters, self.num_clusters)
-
-    if self.type == 'hmm-new':
-      self.trans = cell.HMMCell(self.embed_dim, self.num_clusters, self.feeding != 'none')
-    else:
-      if args.feeding == 'none':
-        self.trans = nn.Linear(1, self.num_clusters**2, bias=False)         # f(cluster, cluster)
-      else:
-        self.trans = nn.Linear(self.embed_dim, self.num_clusters**2, bias=False)         # f(cluster, cluster)
-      self.trans.weight.data.uniform_(-1, 1)                              # 0 to e (logspace)
-
-    # HMM Start Probabilities
-    self.start = nn.Linear(1, self.num_clusters)
+    # Transition cell
+    self.trans = cell.HMMCell(self.embed_dim, self.hidden_dim, 
+                              feed_input = (self.feeding != 'none'), 
+                              delay_trans_softmax= (self.type == 'hmm-1'))
 
     # Emission parameters
-    self.emit = nn.Linear(self.num_clusters, vocab_size, bias=False)   # f(cluster, word)
-    #TODO (Jan) implement emit bias?
-    self.emit.weight.data.uniform_(-1, 1)                              # Otherwise root(V) is huge
+    self.emit = nn.Linear(self.hidden_dim, vocab_size, bias=True)
+
+    self.init_weights()
+
+  def init_weights(self, initrange=1.0):
+    self.emit.weight.data.uniform_(-initrange, initrange)    # Otherwise root(V) is huge
+    self.emit.bias.data.zero_()
+    if not self.glove_emb:
+      self.embed.weight.data.uniform_(-initrange, initrange) 
+
+  def init_hidden_state(self, batch_size):
+    weight = next(self.parameters())
+    # Uniform distribution over clusters
+    return weight.new_full((batch_size, self.hidden_dim), 1/self.hidden_dim)
+
+  def emissions_list(self):
+    emit_distr = F.log_softmax(self.emit.weight, 0) # dim vocab_size x hidden_size
+    return emit_distr.detach().cpu().numpy()
 
   def embed_input(self, x):
     embed_x = self.embed(x)
@@ -68,71 +56,39 @@ class HMM(nn.Module):
       embed_x, _ = self.encode_context(embed_x)
     return embed_x.permute(0, 2, 1) # batch_size x embed_dim x seq_length 
 
-  def forward(self, x):
-    w = x.clone()
-    N = x.size()[0] # batch size
-    T = w.size()[1] # sequence length
-    K = self.num_clusters
+  def forward(self, words, hidden_state):
+    N = words.size()[0] # batch size
+    T = words.size()[1] # sequence length
+    emit_marginal = None
 
     # Embed
-    x = self.embed_input(x)
+    emb = self.embed_input(words)
 
-    # Initial state probabilities
+    # Initial hidden state distribution is computed in first time step
 
-    if self.feeding == 'none':
-      tran = F.log_softmax(self.trans(self.dummy).view(N, K, K), dim=-1)
-
-    zero = torch.zeros(N).to(self.device)
-    pre_alpha = torch.zeros(N, K).to(self.device)
-    cur_alpha = torch.zeros(N, K).to(self.device)
-    if self.type == 'hmm+1':
-      pre_alpha = self.start(self.dummy).expand(N,K)
-    else:
-      pre_alpha = F.log_softmax(self.start(self.dummy).expand(N,K), dim=-1)
-
-    #TODO (Jan) is there a cleaner way to implement this?
-    #TODO (Jan) not understanding the role of Cs. Shouldn't this be deterministic?
-    Emissions = torch.stack([
-        F.log_softmax(self.emit(self.emb_cluster(self.Cs[i])), -1)
-        for i in range(K)])
-    Emissions = Emissions.transpose(0, 1).clone()  # Move batch to the front
+    # Emission distribution (input invariant)
+    emit_distr = F.log_softmax(self.emit.weight, 0) # dim vocab_size x hidden_size (opposite of layer def order)
 
     for t in range(1, T):
       # Transition
-      if self.type == 'hmm-new':
-         if self.feeding == 'none':
-           tran = self.trans(zero, pre_alpha) #TODO alpha -> state
-         else:
-           tran = self.trans(x[:,:,t-1], pre_alpha)
+      state_input = emb[:,:,t-1] 
+      hidden_output = self.trans(state_input, hidden_state)
 
-      elif self.feeding != 'none': #TODO (Jan) is feeding == none implemented?
-        if self.type == 'hmm+1':
-          tran = self.trans(x[:,:,t-1]).view(N, K, K)
-          cur_alpha = pre_alpha.unsqueeze(-1).expand(N, K, K) + tran
-          cur_alpha = torch.logsumexp(cur_alpha, 1)
-          cur_alpha = F.log_softmax(cur_alpha, dim=1).clone()
-        else:
-          tran = F.log_softmax(self.trans(x[:,:,t-1]).view(N, K, K), dim=-1)
-          cur_alpha = pre_alpha.unsqueeze(-1).expand(N, K, K) + tran
-          cur_alpha = torch.logsumexp(cur_alpha, 1)
+      # Emit 
+      word_idx = words[:, t].unsqueeze(1).expand(N, self.hidden_dim)
+      emit_state_ll = emit_distr.gather(0, word_idx) # batch_size x hidden_dim
 
-      # Emission
+      # State Update
+      joint_state_ll = torch.log(hidden_output) + emit_state_ll
+      emit_ll = torch.logsumexp(joint_state_ll, 1)
+      hidden_state = torch.exp(joint_state_ll - emit_ll.unsqueeze(1).expand(N, self.hidden_dim))
 
-      # self.Kr is the (full) range of clusters
-      word_idx = w[:, t].unsqueeze(1).expand(N,K).unsqueeze(2)
-      emit_prob = Emissions.gather(2, word_idx).squeeze()
+      # Accumulate
+      if t == 1:
+        emit_marginal = emit_ll
+      else:
+        emit_marginal = emit_marginal + emit_ll
 
-      # Update
+    return emit_marginal, hidden_state
 
-      # TODO (Jan) update to separate state and observed word probs 
-      cur_alpha = cur_alpha + emit_prob
-
-      pre_alpha = cur_alpha.clone()
-
-    return -1 * torch.mean(torch.logsumexp(cur_alpha, dim=1))
-
-  def emissions_list(self, index):
-    V = F.log_softmax(self.emit(self.emb_cluster(self.Cs[index])), dim=-1)
-    e_list = [torch.exp(V[0][j]).data.item() for j in range(self.vocab_size)]
-    return e_list
 
