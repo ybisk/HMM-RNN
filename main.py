@@ -27,8 +27,8 @@ parser.add_argument('--hidden-dim', type=int, default=100, help='hidden dim (num
 parser.add_argument('--embed-dim', type=int, default=100, help='embedding dim')
 parser.add_argument('--feeding', type=str, default='word',
                     help='none|word|encode-lstm')
-parser.add_argument('--one-hot', action='store_true', default=False,
-                    help='1-hot clusters')
+parser.add_argument('--one-hot', action='store_true', default=False, 
+                    help='1-hot clusters') #TODO not implemented any more
 parser.add_argument('--glove-emb', action='store_true', default=False,
                     help='Use GloVe embeddings instead of learning embeddings.')
 parser.add_argument('--log', type=str, default='./log/', help='Log dir')

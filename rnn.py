@@ -154,7 +154,7 @@ class RNN(nn.Module):
       emit_distr = F.log_softmax(self.emit.weight, 0) # dim vocab_size x hidden_size (opposite of layer def order)
 
     # Embed
-    emb = self.embed_input(words)
+    emb = self.embed_input(words[:,:-1])
 
     for t in range(1, T):
       inp = emb[:,:,t-1]

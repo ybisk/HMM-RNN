@@ -32,7 +32,7 @@ class ElmanCell(nn.Module):
     if self.trans_only_nonlin:
       state = apply_nonlin(state, self.nonlin)
       if self.feed_input: 
-        state = state + self.input_tr(inp) 
+        state = state + self.input_tr(inp)
         # state = self.input_tr(inp) * state  # Yonatan's formulation
     else:
       if self.feed_input:
