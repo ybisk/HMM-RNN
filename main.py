@@ -5,7 +5,6 @@ import argparse
 
 from tensorboardX import SummaryWriter
 
-import hmm
 import rnn
 
 def print_emissions(net, fname, i2voc):
@@ -51,8 +50,6 @@ if args.one_hot:
   fname += "_1hot"
 fname += "_{}".format(args.feeding)
 fname += "_l{}".format(args.max_len)
-#if 'hmm' in args.type:
-#  fname += "_c{}_h{}".format(args.clusters, args.hidden_dim)
 fname += "_h{}".format(args.hidden_dim)
 if args.glove_emb:
   assert args.embed_dim == 100
@@ -88,10 +85,7 @@ def to_string(seq):
 
 vocab_size = len(voc2i)
 
-if 'hmm' in args.type:
-  net = hmm.HMM(vocab_size, args).to(device)
-else:  
-  net = rnn.RNN(vocab_size, args).to(device)
+net = rnn.RNN(vocab_size, args).to(device)
 
 optimizer = torch.optim.Adam(net.parameters(), lr=1e-4) #, weight_decay=1e-3)
 
@@ -104,8 +98,7 @@ if args.write_graph:
 
 step = 0
 for epoch in range(args.epochs):
-
-  # Print # Training
+  # Training
   print("Epoch %d" % epoch)
   if 'hmm' in args.type:
     print_emissions(net, fname, i2voc)
