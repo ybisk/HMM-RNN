@@ -14,6 +14,7 @@ class HMM(nn.Module):
     self.type = args.type
     self.feeding = args.feeding
     self.glove_emb = args.glove_emb
+    self.logspace_hidden = True #TODO experiment with this
 
     # Input embedding parameters
     self.embed = nn.Embedding(vocab_size, self.embed_dim)
@@ -27,8 +28,9 @@ class HMM(nn.Module):
 
     # Transition cell
     self.trans = cell.HMMCell(self.embed_dim, self.hidden_dim, 
+                              logspace_hidden = self.logspace_hidden,
                               feed_input = (self.feeding != 'none'), 
-                              delay_trans_softmax= (self.type == 'hmm-1'))
+                              delay_trans_softmax = (self.type == 'hmm-1'))
 
     # Emission parameters
     self.emit = nn.Linear(self.hidden_dim, vocab_size, bias=True)
@@ -79,9 +81,14 @@ class HMM(nn.Module):
       emit_state_ll = emit_distr.gather(0, word_idx) # batch_size x hidden_dim
 
       # State Update
-      joint_state_ll = torch.log(hidden_output) + emit_state_ll
-      emit_ll = torch.logsumexp(joint_state_ll, 1)
-      hidden_state = torch.exp(joint_state_ll - emit_ll.unsqueeze(1).expand(N, self.hidden_dim))
+      if self.logspace_hidden:
+        joint_state_ll = hidden_output + emit_state_ll
+        emit_ll = torch.logsumexp(joint_state_ll, 1)
+        hidden_state = joint_state_ll - emit_ll.unsqueeze(1).expand(N, self.hidden_dim)
+      else:
+        joint_state_ll = torch.log(hidden_output) + emit_state_ll
+        emit_ll = torch.logsumexp(joint_state_ll, 1)
+        hidden_state = torch.exp(joint_state_ll - emit_ll.unsqueeze(1).expand(N, self.hidden_dim))
 
       # Accumulate
       if t == 1:
