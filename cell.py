@@ -32,7 +32,7 @@ class ElmanCell(nn.Module):
     if self.trans_only_nonlin:
       state = apply_nonlin(state, self.nonlin)
       if self.feed_input: 
-        state = state + self.input_tr(inp) 
+        state = state + self.input_tr(inp)
         # state = self.input_tr(inp) * state  # Yonatan's formulation
     else:
       if self.feed_input:
@@ -64,13 +64,14 @@ class JordanCell(nn.Module):
 
 
 class HMMCell(nn.Module):
-  def __init__(self, input_dim, hidden_dim, feed_input=True,
-               delay_trans_softmax=False):
+  def __init__(self, input_dim, hidden_dim, logspace_hidden=False,
+               feed_input=True, delay_trans_softmax=False):
     super(HMMCell, self).__init__()
     self.input_dim = input_dim
     self.hidden_dim = hidden_dim
     self.feed_input = feed_input
     self.delay_trans_softmax = delay_trans_softmax
+    self.logspace_hidden = logspace_hidden
 
     if feed_input:
       self.transition = nn.Linear(self.input_dim, self.hidden_dim**2, bias=True)
@@ -89,17 +90,23 @@ class HMMCell(nn.Module):
     trans_distr = self.transition(trans_inp).view(batch_size, self.hidden_dim, 
                                             self.hidden_dim)
     # Implementing this in prob space
-
     if self.delay_trans_softmax:
-      state = trans_distr @ state.unsqueeze(2)
-      state = F.softmax(state, dim=1)
-    else:    
-      trans_distr = F.softmax(trans_distr, dim=1)
-      state = trans_distr @ state.unsqueeze(2) 
-
-    #trans_distr = F.log_softmax(transition_distr, dim=2)
-    #state = trans_distr + state.unsqueeze(-1).expand(batch_size, self.hidden_dim, self.hidden_dim).clone()
-    #state = torch.logsumexp(state, 1) # dim batch_size x hidden_dim
+      if self.logspace_hidden:
+        state = trans_distr + state.view(batch_size, self.hidden_dim, 1).expand(batch_size, self.hidden_dim, self.hidden_dim).clone()
+        state = torch.logsumexp(state, 1) 
+        state = F.log_softmax(state, dim=1)
+      else:    
+        state = trans_distr @ state.unsqueeze(2)
+        state = F.softmax(state, dim=1)
+    else:     
+      if self.logspace_hidden:
+        #TODO double-check matrix orientation
+        trans_distr = F.log_softmax(trans_distr, dim=1)
+        state = trans_distr + state.view(batch_size, self.hidden_dim, 1).expand(batch_size, self.hidden_dim, self.hidden_dim).clone()
+        state = torch.logsumexp(state, 1) # dim batch_size x hidden_dim
+      else:    
+        trans_distr = F.softmax(trans_distr, dim=1)
+        state = trans_distr @ state.unsqueeze(2) 
 
     return state.view(batch_size, self.hidden_dim)
 

@@ -5,7 +5,6 @@ import argparse
 
 from tensorboardX import SummaryWriter
 
-import hmm
 import rnn
 
 def print_emissions(net, fname, i2voc):
@@ -28,8 +27,8 @@ parser.add_argument('--hidden-dim', type=int, default=100, help='hidden dim (num
 parser.add_argument('--embed-dim', type=int, default=100, help='embedding dim')
 parser.add_argument('--feeding', type=str, default='word',
                     help='none|word|encode-lstm')
-parser.add_argument('--one-hot', action='store_true', default=False,
-                    help='1-hot clusters')
+parser.add_argument('--one-hot', action='store_true', default=False, 
+                    help='1-hot clusters') #TODO not implemented any more
 parser.add_argument('--glove-emb', action='store_true', default=False,
                     help='Use GloVe embeddings instead of learning embeddings.')
 parser.add_argument('--log', type=str, default='./log/', help='Log dir')
@@ -51,8 +50,6 @@ if args.one_hot:
   fname += "_1hot"
 fname += "_{}".format(args.feeding)
 fname += "_l{}".format(args.max_len)
-#if 'hmm' in args.type:
-#  fname += "_c{}_h{}".format(args.clusters, args.hidden_dim)
 fname += "_h{}".format(args.hidden_dim)
 if args.glove_emb:
   assert args.embed_dim == 100
@@ -88,10 +85,7 @@ def to_string(seq):
 
 vocab_size = len(voc2i)
 
-if 'hmm' in args.type:
-  net = hmm.HMM(vocab_size, args).to(device)
-else:  
-  net = rnn.RNN(vocab_size, args).to(device)
+net = rnn.RNN(vocab_size, args).to(device)
 
 optimizer = torch.optim.Adam(net.parameters(), lr=1e-4) #, weight_decay=1e-3)
 
@@ -104,8 +98,7 @@ if args.write_graph:
 
 step = 0
 for epoch in range(args.epochs):
-
-  # Print # Training
+  # Training
   print("Epoch %d" % epoch)
   if 'hmm' in args.type:
     print_emissions(net, fname, i2voc)

@@ -14,6 +14,7 @@ class RNN(nn.Module):
     self.type = args.type
     self.feeding = args.feeding 
     self.glove_emb = args.glove_emb
+    self.logspace_hidden = True #TODO experiment with this
 
     # Input embedding parameters
     self.embed = nn.Embedding(vocab_size, self.embed_dim)
@@ -26,8 +27,12 @@ class RNN(nn.Module):
       self.encode_context = nn.LSTM(self.embed_dim, self.embed_dim, batch_first=True)
 
     # Transition cell
-
-    if args.type == 'elman' or 'rnn' in args.type:
+    if 'hmm' in args.type:
+      self.trans = cell.HMMCell(self.embed_dim, self.hidden_dim, 
+                                logspace_hidden = self.logspace_hidden,
+                                feed_input = (self.feeding != 'none'), 
+                                delay_trans_softmax = (self.type == 'hmm-1'))
+    elif args.type == 'elman' or 'rnn' in args.type:
       if args.type == 'rnn-1' or args.type == 'rnn-2': 
         nonlin = 'softmax'
       elif args.type == 'rnn-1a':
@@ -62,7 +67,10 @@ class RNN(nn.Module):
 
   def init_hidden_state(self, batch_size, inp=None):
     weight = next(self.parameters())
-    if self.type == 'jordan':
+    if 'hmm' in self.type:
+      # Uniform distribution over clusters
+      return weight.new_full((batch_size, self.hidden_dim), 1/self.hidden_dim)
+    elif self.type == 'jordan':
       assert inp is not None
       state = weight.new_zeros((batch_size, self.vocab_size))
       state.scatter_(1, inp.view(batch_size, 1), 1)
@@ -73,11 +81,64 @@ class RNN(nn.Module):
     else:
       return weight.new_zeros((batch_size, self.hidden_dim))
 
+  def emissions_list(self):
+    emit_distr = F.log_softmax(self.emit.weight, 0) # dim vocab_size x hidden_size
+    return emit_distr.detach().cpu().numpy()
+
   def embed_input(self, words):
     emb = self.embed(words)
     if 'encode' in self.feeding:
       emb, _ = self.encode_context(embed)
     return emb.permute(0, 2, 1) # batch_size x embed_dim x seq_length 
+
+  def rnn_step(self, state_input, hidden_state, word_idx):
+    # Transition
+    if self.type == 'lstm':
+      hidden_output, hidden_memcell = self.trans(state_input, hidden_state)
+    elif self.type == 'jordan':
+      #TODO move to cell if we can tie weights
+      hidden_input_state = hidden_state @ self.embed.weight
+      hidden_output = self.trans(state_input, hidden_input_state)
+    else:  
+      hidden_output = self.trans(state_input, hidden_state)
+
+    # Emit
+    logits = self.emit(hidden_output)
+    emit_distr = F.log_softmax(logits, -1)        # Emission
+
+    emit_ll = emit_distr.gather(1, word_idx).squeeze()           # Word Prob
+
+    # State Update
+    if self.type == 'lstm':
+      hidden_state = (hidden_output, hidden_memcell)
+    elif self.type == 'jordan':
+      hidden_state = F.softmax(logits, -1) # not log_softmax
+    else:
+      hidden_state = hidden_output 
+
+    return emit_ll, hidden_state
+
+  def hmm_step(self, state_input, hidden_state, emit_distr, word_idx):
+    N = word_idx.size()[0] # batch size
+
+    # Transition
+    hidden_output = self.trans(state_input, hidden_state)
+
+    # Emit 
+    word_idx = word_idx.expand(N, self.hidden_dim)
+    emit_state_ll = emit_distr.gather(0, word_idx) # batch_size x hidden_dim
+
+    # State Update
+    if self.logspace_hidden:
+      joint_state_ll = hidden_output + emit_state_ll
+      emit_ll = torch.logsumexp(joint_state_ll, 1)
+      hidden_state = joint_state_ll - emit_ll.unsqueeze(1).expand(N, self.hidden_dim)
+    else:
+      joint_state_ll = torch.log(hidden_output) + emit_state_ll
+      emit_ll = torch.logsumexp(joint_state_ll, 1)
+      hidden_state = torch.exp(joint_state_ll - emit_ll.unsqueeze(1).expand(N, self.hidden_dim))
+
+    return emit_ll, hidden_state
 
   def forward(self, words, hidden_state):
     N = words.size()[0] # batch size
@@ -88,42 +149,22 @@ class RNN(nn.Module):
     if self.type == 'lstm' or self.type == 'gru':
       assert self.feeding != 'none'
 
+    if 'hmm' in self.type:
+      # Emission distribution (input invariant)
+      emit_distr = F.log_softmax(self.emit.weight, 0) # dim vocab_size x hidden_size (opposite of layer def order)
+
     # Embed
-    emb = self.embed_input(words)
+    emb = self.embed_input(words[:,:-1])
 
     for t in range(1, T):
-      state_input = emb[:,:,t-1] 
-
-      # Transition
-      if self.type == 'lstm':
-        hidden_output, hidden_memcell = self.trans(state_input, hidden_state)
-      elif self.type == 'jordan':
-        # h_t = act(W_h x_t + U_h y_t-1 + b_h)
-        #TODO move to cell if we can tie weights
-        hidden_input_state = hidden_state @ self.embed.weight
-        hidden_output = self.trans(state_input, hidden_input_state)
-      else:  
-        hidden_output = self.trans(state_input, hidden_state)
-
-      # Emit
-
-      # y_t = act(W_y h_t + b_y)
-      logits = self.emit(hidden_output)
-      emit_distr = F.log_softmax(logits, -1)        # Emission
-
+      inp = emb[:,:,t-1]
       word_idx = words[:, t].unsqueeze(1)
-      emit_ll = emit_distr.gather(1, word_idx).squeeze()           # Word Prob
 
-      # State Update
-      #TODO do we need to clone here?
-      if self.type == 'lstm':
-        hidden_state = (hidden_output.clone(), hidden_memcell.clone())
-      elif self.type == 'jordan':
-        hidden_state = F.softmax(logits, -1)
+      if 'hmm' in self.type:
+        emit_ll, hidden_state = self.hmm_step(inp, hidden_state, emit_distr, word_idx)
       else:
-        hidden_state = hidden_output.clone() 
+        emit_ll, hidden_state = self.rnn_step(inp, hidden_state, word_idx)
 
-      # Accumulate
       if t == 1:
         emit_marginal = emit_ll
       else:
