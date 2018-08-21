@@ -170,5 +170,5 @@ class RNN(nn.Module):
       else:
         emit_marginal = emit_marginal + emit_ll
 
-    return emit_marginal, hidden_state
+    return emit_marginal / T, hidden_state
 
