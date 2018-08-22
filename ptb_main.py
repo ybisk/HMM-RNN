@@ -159,14 +159,15 @@ optimizer = torch.optim.Adam(net.parameters(), lr=lr) #, weight_decay=1e-3)
 
 best_val_loss = None
 
+TBstep = 0
 for epoch in range(args.epochs):
+  step = 0
   # Training
   if 'hmm' in args.type:
     print_emissions(net, output_fname(), corpus.dict.i2voc)
 
   net.train() 
   total_loss = 0.0
-  step = 0
   start_time = time.time()
 
   if args.type == 'jordan':
@@ -198,9 +199,10 @@ for epoch in range(args.epochs):
     iterate.set_description("Loss {:8.4f}".format(loss.item()))
 
     step += 1
-    writer.add_scalar('Loss', loss.item(), step)
+    TBstep += 1
+    writer.add_scalar('Loss', loss.item(), TBstep)
 
-  cur_loss = total_loss / step #TODO loss calculation might be approximate
+  cur_loss = total_loss / step # loss calculation might be approximate
   elapsed = time.time() - start_time
   print('| epoch {:3d} | {:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | loss {:5.2f} | ppl {:8.2f}'.format(
       epoch, step, lr, elapsed * 1000 / step, cur_loss, math.exp(cur_loss)))
@@ -208,6 +210,9 @@ for epoch in range(args.epochs):
   val_loss = evaluate(val_data)
   print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f}'.format(
       epoch, (time.time() - start_time), val_loss, math.exp(val_loss)))
+
+  writer.add_scalar('Prp_Train', math.exp(cur_loss), epoch)
+  writer.add_scalar('Prp_Val', math.exp(val_loss), epoch)
 
   # Save the model if the validation loss is the best we've seen so far.
   if not best_val_loss or val_loss < best_val_loss:

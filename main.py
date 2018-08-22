@@ -21,7 +21,7 @@ def print_emissions(net, fname, i2voc):
 
 parser = argparse.ArgumentParser(description='HMM-RNN')
 parser.add_argument('--batch-size', type=int, default=32, help='batch size')
-parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
+parser.add_argument('--epochs', type=int, default=100, help='number of epochs')
 parser.add_argument('--max-len', type=int, default=20, help='max seq len')
 parser.add_argument('--hidden-dim', type=int, default=100, help='hidden dim (num clusters for HMM)')
 parser.add_argument('--embed-dim', type=int, default=100, help='embedding dim')
