@@ -14,7 +14,7 @@ class RNN(nn.Module):
     self.type = args.type
     self.feeding = args.feeding 
     self.glove_emb = args.glove_emb
-    self.logspace_hidden = True #TODO experiment with this
+    self.logspace_hidden = True 
 
     self.drop = nn.Dropout(args.dropout)
     # Input embedding parameters

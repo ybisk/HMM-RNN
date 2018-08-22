@@ -92,7 +92,7 @@ class HMMCell(nn.Module):
     # Implementing this in prob space
     if self.delay_trans_softmax:
       if self.logspace_hidden:
-        state = trans_distr + state.view(batch_size, self.hidden_dim, 1).expand(batch_size, self.hidden_dim, self.hidden_dim).clone()
+        state = trans_distr + state.view(batch_size, 1, self.hidden_dim).expand(batch_size, self.hidden_dim, self.hidden_dim).clone()
         state = torch.logsumexp(state, 1) 
         state = F.log_softmax(state, dim=1)
       else:    
@@ -100,10 +100,9 @@ class HMMCell(nn.Module):
         state = F.softmax(state, dim=1)
     else:     
       if self.logspace_hidden:
-        #TODO double-check matrix orientation
         trans_distr = F.log_softmax(trans_distr, dim=1)
-        state = trans_distr + state.view(batch_size, self.hidden_dim, 1).expand(batch_size, self.hidden_dim, self.hidden_dim).clone()
-        state = torch.logsumexp(state, 1) # dim batch_size x hidden_dim
+        state = trans_distr + state.view(batch_size, 1, self.hidden_dim).expand(batch_size, self.hidden_dim, self.hidden_dim).clone()
+        state = torch.logsumexp(state, 1)
       else:    
         trans_distr = F.softmax(trans_distr, dim=1)
         state = trans_distr @ state.unsqueeze(2) 
