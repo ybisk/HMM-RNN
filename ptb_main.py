@@ -152,8 +152,9 @@ optimizer = torch.optim.Adam(net.parameters(), lr=lr) #, weight_decay=1e-3)
 
 best_val_loss = None
 
-step = 0
+TBstep = 0
 for epoch in range(args.epochs):
+  step = 0
   # Training
   if 'hmm' in args.type:
     print_emissions(net, output_fname(), corpus.dict.i2voc)
@@ -184,7 +185,8 @@ for epoch in range(args.epochs):
     iterate.set_description("Loss {:8.4f}".format(loss.item()))
 
     step += 1
-    writer.add_scalar('Loss', loss.item(), step)
+    TBstep += 1
+    writer.add_scalar('Loss', loss.item(), TBstep)
 
   cur_loss = total_loss / step #TODO loss calculation might be approximate
   elapsed = time.time() - start_time
