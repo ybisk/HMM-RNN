@@ -16,7 +16,7 @@ parser.add_argument('--data-dir', type=str, default='./data/ptb-mikolov',
                     help='location of the data corpus')
 parser.add_argument('--save', type=str, default='model',
                     help='path to save the final model')
-parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
+parser.add_argument('--epochs', type=int, default=100, help='number of epochs')
 
 parser.add_argument('--type', type=str, default='hmm',
                     help='hmm|hmm+1|jordan|elman|dist|gru|lstm')
@@ -152,6 +152,7 @@ optimizer = torch.optim.Adam(net.parameters(), lr=lr) #, weight_decay=1e-3)
 
 best_val_loss = None
 
+step = 0
 for epoch in range(args.epochs):
   # Training
   if 'hmm' in args.type:
@@ -159,7 +160,6 @@ for epoch in range(args.epochs):
 
   net.train() 
   total_loss = 0.0
-  step = 0
   start_time = time.time()
 
   if args.type == 'jordan':
@@ -194,6 +194,9 @@ for epoch in range(args.epochs):
   val_loss = evaluate(val_data)
   print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f}'.format(
       epoch, (time.time() - start_time), val_loss, math.exp(val_loss)))
+
+  writer.add_scalar('Prp_Train', math.exp(cur_loss), epoch)
+  writer.add_scalar('Prp_Val', math.exp(val_loss), epoch)
 
   # Save the model if the validation loss is the best we've seen so far.
   if not best_val_loss or val_loss < best_val_loss:
