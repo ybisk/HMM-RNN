@@ -16,7 +16,7 @@ parser.add_argument('--data-dir', type=str, default='./data/ptb-mikolov',
                     help='location of the data corpus')
 parser.add_argument('--save', type=str, default='model',
                     help='path to save the final model')
-parser.add_argument('--epochs', type=int, default=20, help='number of epochs')
+parser.add_argument('--epochs', type=int, default=100, help='number of epochs')
 
 parser.add_argument('--type', type=str, default='hmm',
                     help='hmm|hmm+1|jordan|elman|dist|gru|lstm')
@@ -34,6 +34,16 @@ parser.add_argument('--batch-size', type=int, default=20, help='batch size')
 parser.add_argument('--lr', type=float, default=0.01, help='initial learning rate')
 parser.add_argument('--hidden-dim', type=int, default=100, help='hidden dim (num clusters for HMM)')
 parser.add_argument('--embed-dim', type=int, default=100, help='embedding dim')
+parser.add_argument('--num-layers', type=int, default=1, help='number of layers')
+parser.add_argument('--clip', type=float, default=0.25, help='gradient clipping')
+parser.add_argument('--dropout', type=float, default=0.0,
+                    help='dropout applied to layers (0 = no dropout)')
+parser.add_argument('--initrange', type=float, default=1.0, 
+                    help='initial param range')
+parser.add_argument('--tie-embeddings', action='store_true',
+                    help='tie the word embedding and softmax weights')
+parser.add_argument('--optim', type=str, default='adam',
+                    help='adam|sgd')
 
 parser.add_argument('--log', type=str, default='./log/', help='Log dir')
 parser.add_argument('--seed', type=int, default=1111, help='random seed')
@@ -90,8 +100,6 @@ train_data = batchify(corpus.train, args.batch_size)
 val_data = batchify(corpus.valid, eval_batch_size)
 test_data = batchify(corpus.test, eval_batch_size)
 
-print("Training size {:5}".format(train_data.size()[1]))
-
 def print_emissions(net, fname, i2voc):
   o = open("Emissions.{}.txt".format(fname),'w')
   e_list = net.emissions_list()
@@ -132,8 +140,7 @@ def evaluate(data_source):
   with torch.no_grad():
     for i in range(0, data_source.size(1) - 1, args.max_len):
       data_tensor = get_batch(data_source, i)
-      output, hidden_state = net(data_tensor, hidden_state)  
-
+      emit_marginal, hidden_state = net(data_tensor, hidden_state)  
       loss = -1 * torch.mean(emit_marginal)
       total_loss += loss.item() * data_tensor.size()[1]
       hidden_state = repackage_hidden(hidden_state)
@@ -172,13 +179,20 @@ for epoch in range(args.epochs):
   for i in iterate:
     data_tensor = get_batch(train_data, i)
     hidden_state = repackage_hidden(hidden_state)
-    net.zero_grad() #TODO was: optimizer.zero_grad()
+    net.zero_grad()
     
     emit_marginal, hidden_state = net(data_tensor, hidden_state)
 
     loss = -1 * torch.mean(emit_marginal)
     loss.backward()
-    optimizer.step()
+
+    if args.optim == 'sgd':
+      torch.nn.utils.clip_grad_norm_(net.parameters(), args.clip)
+      for p in net.parameters():
+        p.data.add_(-lr, p.grad.data)
+    else:
+      optimizer.step()
+
     total_loss += loss.item()
 
     iterate.set_description("Loss {:8.4f}".format(loss.item()))
@@ -200,9 +214,10 @@ for epoch in range(args.epochs):
     with open(args.save + '.' + output_fname() + '.pt', 'wb') as f:
       torch.save(net, f)
     best_val_loss = val_loss
-  #else:
+  else:
     # Anneal the learning rate if no improvement has been seen in the validation dataset.
-  #  lr /= 4.0
+    if args.optim == 'sgd':
+      lr /= 4.0
 
   if args.write_graph:
     out = open("graph.dot",'w')
@@ -217,7 +232,7 @@ if args.test:
       net = torch.load(f)
       # after load the rnn params are not a continuous chunk of memory
       # this makes them a continuous chunk, and will speed up forward pass
-      net.rnn.flatten_parameters()
+      # net.rnn.flatten_parameters() #TODO
 
   # Run on test data.
   test_loss = evaluate(test_data)

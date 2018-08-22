@@ -16,6 +16,7 @@ class RNN(nn.Module):
     self.glove_emb = args.glove_emb
     self.logspace_hidden = True #TODO experiment with this
 
+    self.drop = nn.Dropout(args.dropout)
     # Input embedding parameters
     self.embed = nn.Embedding(vocab_size, self.embed_dim)
     if args.glove_emb:
@@ -27,6 +28,8 @@ class RNN(nn.Module):
       self.encode_context = nn.LSTM(self.embed_dim, self.embed_dim, batch_first=True)
 
     # Transition cell
+    # TODO implement multiple layers
+    assert args.num_layers == 1
     if 'hmm' in args.type:
       self.trans = cell.HMMCell(self.embed_dim, self.hidden_dim, 
                                 logspace_hidden = self.logspace_hidden,
@@ -55,15 +58,19 @@ class RNN(nn.Module):
       sys.exit()
 
     # Emission parameters
-    self.emit = nn.Linear(self.hidden_dim, vocab_size, bias=True) 
+    self.emit = nn.Linear(self.hidden_dim, vocab_size) 
 
-    self.init_weights()
+    if args.tie_embeddings:
+      assert self.hidden_dim == self.embed_dim, 'When using tied embeddings, hidden size and embeddings size must be equal.'
+      self.emit.weight = self.embed.weight
+
+    self.init_weights(args.initrange)
 
   def init_weights(self, initrange=1.0):
-    self.emit.weight.data.uniform_(-initrange, initrange)    # Otherwise root(V) is huge
-    self.emit.bias.data.zero_()
     if not self.glove_emb:
       self.embed.weight.data.uniform_(-initrange, initrange) 
+    self.emit.bias.data.zero_()
+    self.emit.weight.data.uniform_(-initrange, initrange) # Otherwise root(V) is huge
 
   def init_hidden_state(self, batch_size, inp=None):
     weight = next(self.parameters())
@@ -103,7 +110,8 @@ class RNN(nn.Module):
       hidden_output = self.trans(state_input, hidden_state)
 
     # Emit
-    logits = self.emit(hidden_output)
+    output = self.drop(hidden_output.clone())
+    logits = self.emit(output)
     emit_distr = F.log_softmax(logits, -1)        # Emission
 
     emit_ll = emit_distr.gather(1, word_idx).squeeze()           # Word Prob
@@ -129,6 +137,8 @@ class RNN(nn.Module):
     emit_state_ll = emit_distr.gather(0, word_idx) # batch_size x hidden_dim
 
     # State Update
+    # TODO standard output dropout won't work here; maybe try fixed mask (like variational dropout)
+
     if self.logspace_hidden:
       joint_state_ll = hidden_output + emit_state_ll
       emit_ll = torch.logsumexp(joint_state_ll, 1)
@@ -155,6 +165,7 @@ class RNN(nn.Module):
 
     # Embed
     emb = self.embed_input(words[:,:-1])
+    emb = self.drop(emb)
 
     for t in range(1, T):
       inp = emb[:,:,t-1]
@@ -170,5 +181,5 @@ class RNN(nn.Module):
       else:
         emit_marginal = emit_marginal + emit_ll
 
-    return emit_marginal, hidden_state
+    return emit_marginal / (T - 1), hidden_state
 
