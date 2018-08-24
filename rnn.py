@@ -14,7 +14,7 @@ class RNN(nn.Module):
     self.type = args.type
     self.feeding = args.feeding 
     self.glove_emb = args.glove_emb
-    self.logspace_hidden = True 
+    self.logspace_hidden = False
 
     self.drop = nn.Dropout(args.dropout)
     # Input embedding parameters
@@ -34,14 +34,12 @@ class RNN(nn.Module):
       self.trans = cell.HMMCell(self.embed_dim, self.hidden_dim, 
                                 logspace_hidden = self.logspace_hidden,
                                 feed_input = (self.feeding != 'none'), 
-                                delay_trans_softmax = (self.type == 'hmm-1'))
+                                delay_trans_softmax = (self.type == 'hmm+1'))
     elif args.type == 'elman' or 'rnn' in args.type:
       if args.type == 'rnn-1' or args.type == 'rnn-2': 
         nonlin = 'softmax'
-      elif args.type == 'rnn-1a':
+      else:
         nonlin = 'sigmoid'
-      else: 
-        nonlin = 'tanh'
       self.trans = cell.ElmanCell(self.embed_dim, self.hidden_dim, nonlin,
           feed_input = (self.feeding != 'none'), 
           trans_only_nonlin = (args.type == 'rnn-2'))

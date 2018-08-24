@@ -19,7 +19,7 @@ parser.add_argument('--save', type=str, default='model',
 parser.add_argument('--epochs', type=int, default=100, help='number of epochs')
 
 parser.add_argument('--type', type=str, default='hmm',
-                    help='hmm|hmm+1|jordan|elman|dist|gru|lstm')
+                    help='hmm|hmm+1|jordan|elman|dist|gru|lstm|rnn-1|rnn-2')
 parser.add_argument('--feeding', type=str, default='word',
                     help='none|word|encode-lstm')
 parser.add_argument('--glove-emb', action='store_true', default=False,
@@ -44,7 +44,7 @@ parser.add_argument('--tie-embeddings', action='store_true',
                     help='tie the word embedding and softmax weights')
 parser.add_argument('--optim', type=str, default='adam',
                     help='adam|sgd')
-
+parser.add_argument('--headless', action='store_true', help='kill prints')
 parser.add_argument('--log', type=str, default='./log/', help='Log dir')
 parser.add_argument('--seed', type=int, default=1111, help='random seed')
 parser.add_argument('--note', type=str, default='',
@@ -81,9 +81,13 @@ def output_fname():
 if args.glove_emb:
   assert args.embed_dim == 100
 
+def h_print(s):
+  if not args.headless:
+    print(s)
+
 writer = SummaryWriter(args.log + output_fname())
 
-print("Reading the data")
+h_print("Reading the data")
 corpus = corpus_data.Corpus(args.data_dir)
 
 def batchify(data, N):
@@ -147,7 +151,7 @@ def evaluate(data_source):
   return total_loss / (data_source.size(1) - 1)
 
 
-print("Starting Training")
+h_print("Starting Training")
 """
   Train
 """
@@ -176,7 +180,7 @@ for epoch in range(args.epochs):
     hidden_state = net.init_hidden_state(args.batch_size) 
  
   inds = list(range(train_data.size(1) - 1))
-  iterate = tqdm.tqdm(range(0, len(inds) - len(inds)%args.max_len, args.max_len), ncols=80)
+  iterate = tqdm.tqdm(range(0, len(inds) - len(inds)%args.max_len, args.max_len), ncols=80, disable=args.headless)
   for i in iterate:
     data_tensor = get_batch(train_data, i)
     hidden_state = repackage_hidden(hidden_state)
@@ -204,12 +208,12 @@ for epoch in range(args.epochs):
 
   cur_loss = total_loss / step # loss calculation might be approximate
   elapsed = time.time() - start_time
-  print('| epoch {:3d} | {:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | loss {:5.2f} | ppl {:8.2f}'.format(
-      epoch, step, lr, elapsed * 1000 / step, cur_loss, math.exp(cur_loss)))
+  h_print('| epoch {:3d} | {:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | loss {:5.2f} | ppl {:8.2f}'.format(
+        epoch, step, lr, elapsed * 1000 / step, cur_loss, math.exp(cur_loss)))
     
   val_loss = evaluate(val_data)
-  print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f}'.format(
-      epoch, (time.time() - start_time), val_loss, math.exp(val_loss)))
+  h_print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f}'.format(
+        epoch, (time.time() - start_time), val_loss, math.exp(val_loss)))
 
   writer.add_scalar('Prp_Train', math.exp(cur_loss), epoch)
   writer.add_scalar('Prp_Val', math.exp(val_loss), epoch)
@@ -228,7 +232,7 @@ for epoch in range(args.epochs):
     out = open("graph.dot",'w')
     out.write(str(make_dot(loss, params=dict(net.named_parameters()))))
     out.close()
-    print("generated graph")
+    h_print("generated graph")
     sys.exit()
 
 if args.test:
