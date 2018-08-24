@@ -188,12 +188,14 @@ for epoch in range(args.epochs):
     
     emit_marginal, hidden_state = net(data_tensor, hidden_state)
 
+    # emit_marginal[emit_marginal != emit_marginal] = 0 # hack to avoid NaNs
     loss = -1 * torch.mean(emit_marginal)
     loss.backward()
 
     if args.optim == 'sgd':
       torch.nn.utils.clip_grad_norm_(net.parameters(), args.clip)
       for p in net.parameters():
+        assert hasattr(p.grad, "data"), "Network parameter not in computation graph."
         p.data.add_(-lr, p.grad.data)
     else:
       optimizer.step()

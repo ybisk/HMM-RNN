@@ -74,13 +74,16 @@ class RNN(nn.Module):
     weight = next(self.parameters())
     if 'hmm' in self.type:
       # Uniform distribution over clusters
-      return weight.new_full((batch_size, self.hidden_dim), 1/self.hidden_dim)
+      if self.logspace_hidden:
+        return weight.new_full((batch_size, self.hidden_dim), -np.log(self.hidden_dim))
+      else:
+        return weight.new_full((batch_size, self.hidden_dim), 1/self.hidden_dim)
     elif self.type == 'jordan':
       assert inp is not None
       state = weight.new_zeros((batch_size, self.vocab_size))
       state.scatter_(1, inp.view(batch_size, 1), 1)
       return state
-    if self.type == 'lstm':
+    elif self.type == 'lstm':
       return (weight.new_zeros((batch_size, self.hidden_dim)),
               weight.new_zeros((batch_size, self.hidden_dim)))
     else:
@@ -159,7 +162,9 @@ class RNN(nn.Module):
 
     if 'hmm' in self.type:
       # Emission distribution (input invariant)
-      emit_distr = F.log_softmax(self.emit.weight, 0) # dim vocab_size x hidden_size (opposite of layer def order)
+      # dim vocab_size x hidden_size (opposite of layer def order)
+      emit_weight = self.emit.weight + self.emit.bias.view(self.vocab_size, 1).expand(self.vocab_size, self.hidden_dim) 
+      emit_distr = F.log_softmax(emit_weight, 0) 
 
     # Embed
     emb = self.embed_input(words[:,:-1])
