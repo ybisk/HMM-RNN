@@ -38,12 +38,23 @@ parser.add_argument('--num-layers', type=int, default=1, help='number of layers'
 parser.add_argument('--clip', type=float, default=0.25, help='gradient clipping')
 parser.add_argument('--dropout', type=float, default=0.0,
                     help='dropout applied to layers (0 = no dropout)')
+
+parser.add_argument('--num_init_lr_epochs', type=int, default=0, 
+                    help='number of epochs before learning rate decay')
+parser.add_argument('--lr_decay', type=float, default=1.2,
+                    help='learning rate decay per epoch')
+parser.add_argument('--reduce_lr', action='store_true', #true for pytorch LM optim
+                    help='reduce lr if val ppl does not improve')
+
 parser.add_argument('--initrange', type=float, default=1.0, 
                     help='initial param range')
 parser.add_argument('--tie-embeddings', action='store_true',
                     help='tie the word embedding and softmax weights')
 parser.add_argument('--optim', type=str, default='adam',
                     help='adam|sgd')
+
+parser.add_argument('--patience', type=int, default=0, 
+                    help='Stop training if not improving for some number of epochs')
 parser.add_argument('--headless', action='store_true', help='kill prints')
 parser.add_argument('--log', type=str, default='./log/', help='Log dir')
 parser.add_argument('--seed', type=int, default=1111, help='random seed')
@@ -159,11 +170,16 @@ if args.write_graph:
   writer.add_graph(model=net.Net(), input_to_model=torch.ones((2,2)), verbose=True)
 
 lr = args.lr
-optimizer = torch.optim.Adam(net.parameters(), lr=lr) #, weight_decay=1e-3)
+
+if args.optim == 'adam':
+  optimizer = torch.optim.Adam(net.parameters(), lr=lr) #, weight_decay=1e-3)
+else:
+  optimizer = torch.optim.SGD(net.parameters(), lr=lr) #, weight_decay=1e-3)
 
 best_val_loss = None
 
 TBstep = 0
+patience_count = 0
 for epoch in range(args.epochs):
   step = 0
   # Training
@@ -192,13 +208,15 @@ for epoch in range(args.epochs):
     loss = -1 * torch.mean(emit_marginal)
     loss.backward()
 
-    if args.optim == 'sgd':
+    if args.clip > 0:
       torch.nn.utils.clip_grad_norm_(net.parameters(), args.clip)
-      for p in net.parameters():
-        assert hasattr(p.grad, "data"), "Network parameter not in computation graph."
-        p.data.add_(-lr, p.grad.data)
-    else:
-      optimizer.step()
+    optimizer.step()
+
+    # Rather using SGD optimizer  
+    #if args.optim == 'sgd':
+    #  for p in net.parameters():
+    #    assert hasattr(p.grad, "data"), "Network parameter not in computation graph."
+    #    p.data.add_(-lr, p.grad.data)
 
     total_loss += loss.item()
 
@@ -225,10 +243,19 @@ for epoch in range(args.epochs):
     with open(args.save + '.' + output_fname() + '.pt', 'wb') as f:
       torch.save(net, f)
     best_val_loss = val_loss
+    patient_count = 0
   else:
+    patient_count += 1
     # Anneal the learning rate if no improvement has been seen in the validation dataset.
-    if args.optim == 'sgd':
+    if args.reduce_lr:
       lr /= 4.0
+
+  if (args.optim == 'sgd' and not args.reduce_lr and args.num_init_lr_epochs > 0 
+      and epoch >= args.num_init_lr_epochs):
+    lr /= args.lr_decay
+
+  for param_group in optimizer.param_groups:
+    param_group['lr'] = lr
 
   if args.write_graph:
     out = open("graph.dot",'w')
@@ -236,6 +263,9 @@ for epoch in range(args.epochs):
     out.close()
     h_print("generated graph")
     sys.exit()
+
+  if args.patience > 0 and patience_count >= args.patience:
+    break
 
 if args.test:
   # Load the best saved model.
