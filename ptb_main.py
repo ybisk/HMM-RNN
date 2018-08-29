@@ -87,6 +87,11 @@ def output_fname():
     fname += "_fixedE100"
   else:
     fname += "_e{}".format(args.embed_dim)
+  fname += "_lr{}".format(args.lr)
+  fname += "_drop{}".format(args.dropout)
+  fname += "_{}".format(args.optim)
+  if args.tie_embeddings:
+    fname += "_tieE"
   return fname
 
 if args.glove_emb:
@@ -183,8 +188,8 @@ patience_count = 0
 for epoch in range(args.epochs):
   step = 0
   # Training
-  if 'hmm' in args.type:
-    print_emissions(net, output_fname(), corpus.dict.i2voc)
+  #if 'hmm' in args.type:
+  #  print_emissions(net, output_fname(), corpus.dict.i2voc)
 
   net.train() 
   total_loss = 0.0
