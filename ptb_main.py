@@ -161,6 +161,8 @@ def evaluate(data_source):
       hidden_state = repackage_hidden(hidden_state)
   return total_loss / (data_source.size(1) - 1)
 
+num_parameters = sum(p.numel() for p in net.parameters() if p.requires_grad)
+h_print("Num trainable parameters: %d" % num_parameters)
 
 h_print("Starting Training")
 """
@@ -277,9 +279,9 @@ if args.test:
 
   # Run on test data.
   test_loss = evaluate(test_data)
-  print('=' * 89)
-  print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
+  h_print('=' * 89)
+  h_print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
       test_loss, math.exp(test_loss)))
-  print('=' * 89)
+  h_print('=' * 89)
 
 writer.close()
