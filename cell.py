@@ -102,7 +102,7 @@ class HMMCell(nn.Module):
     trans_inp = inp if self.feed_input else inp.new_ones((batch_size, 1))
     trans_distr = self.transition(trans_inp).view(batch_size, self.hidden_dim, 
                                             self.hidden_dim)
-    # Implementing this in prob space
+
     if self.delay_trans_softmax:
       if self.logspace_hidden:
         state = trans_distr + state.view(batch_size, 1, self.hidden_dim).expand(batch_size, self.hidden_dim, self.hidden_dim).clone()
@@ -115,7 +115,7 @@ class HMMCell(nn.Module):
       if self.logspace_hidden:
         trans_distr = F.log_softmax(trans_distr, dim=1)
         state = trans_distr + state.view(batch_size, 1, self.hidden_dim).expand(batch_size, self.hidden_dim, self.hidden_dim).clone()
-        state = torch.logsumexp(state, 1)
+        state = torch.logsumexp(state, 2)
       else:    
         trans_distr = F.softmax(trans_distr, dim=1)
         state = trans_distr @ state.unsqueeze(2) 

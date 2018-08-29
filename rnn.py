@@ -35,7 +35,7 @@ class RNN(nn.Module):
       assert False, 'Feeding encoding not implemented'
 
     # Transition cell
-    if args.type.startswith('hmm'):
+    if args.type.startswith('hmm') or args.type.startswith('rnn-hmm'):
       self.trans = cell.HMMCell(self.embed_dim, self.hidden_dim, 
                                 logspace_hidden = self.logspace_hidden,
                                 feed_input = (self.feeding != 'none'), 
@@ -99,7 +99,7 @@ class RNN(nn.Module):
   def embed_input(self, words):
     emb = self.embed(words)
     if self.feeding.startswith('encode'):
-      emb, _ = self.encode_context(embed)
+      emb, _ = self.encode_context(emb)
     return emb.permute(0, 2, 1) # batch_size x embed_dim x seq_length 
 
   def rnn_step(self, state_input, hidden_state, word_idx):
@@ -141,21 +141,38 @@ class RNN(nn.Module):
     # Transition
     hidden_output = self.trans(state_input, hidden_state)
 
+    if not self.logspace_hidden: # need log prob for any subsequent computation
+      hidden_output = torch.log(hidden_output)
+
     # Emit 
-    word_idx = word_idx.expand(N, self.hidden_dim)
-    emit_state_ll = emit_distr.gather(0, word_idx) # batch_size x hidden_dim
+    if self.type == 'hmm+2': # delay emit softmax
+      #TODO this consumes a lot of memory, and is slow.
+      emit_distr = emit_distr.unsqueeze(0).expand(N, self.vocab_size, self.hidden_dim)
+      hidden_output = hidden_output.view(N, 1, self.hidden_dim).expand(
+              N, self.vocab_size, self.hidden_dim)
+      emit_weight = emit_distr + hidden_output
+      emit_distr = torch.log_softmax(emit_weight.view(N, -1), dim=1).view(
+              N, self.vocab_size, self.hidden_dim)
+
+      word_idx = word_idx.unsqueeze(1).expand(N, 1, self.hidden_dim)
+      emit_state_ll = emit_distr.gather(1, word_idx).view(N, self.hidden_dim)
+    else:
+      word_idx = word_idx.expand(N, self.hidden_dim)
+      emit_state_ll = emit_distr.gather(0, word_idx) # batch_size x hidden_dim
 
     # State Update
     # TODO standard output dropout won't work here; maybe try fixed mask (like variational dropout)
 
-    if self.logspace_hidden:
-      joint_state_ll = hidden_output + emit_state_ll
-      emit_ll = torch.logsumexp(joint_state_ll, 1)
-      hidden_state = joint_state_ll - emit_ll.unsqueeze(1).expand(N, self.hidden_dim)
+    if self.type == 'hmm+2':
+      joint_state_ll = emit_state_ll
     else:
-      joint_state_ll = torch.log(hidden_output) + emit_state_ll
-      emit_ll = torch.logsumexp(joint_state_ll, 1)
-      hidden_state = torch.exp(joint_state_ll - emit_ll.unsqueeze(1).expand(N, self.hidden_dim))
+      joint_state_ll = hidden_output + emit_state_ll
+
+    emit_ll = torch.logsumexp(joint_state_ll, 1)
+    hidden_state = joint_state_ll - emit_ll.unsqueeze(1).expand(N, self.hidden_dim)
+
+    if not self.logspace_hidden:
+      hidden_state = torch.exp(hidden_state)
 
     return emit_ll, hidden_state
 
@@ -168,7 +185,8 @@ class RNN(nn.Module):
       # Emission distribution (input invariant)
       # dim vocab_size x hidden_size (opposite of layer def order)
       emit_weight = self.emit.weight + self.emit.bias.view(self.vocab_size, 1).expand(self.vocab_size, self.hidden_dim) 
-      emit_distr = F.log_softmax(emit_weight, 0) 
+      if not self.type == 'hmm+2': # else delay emit softmax
+        emit_weight = F.log_softmax(emit_weight, 0) 
 
     # Embed
     emb = self.embed_input(words[:,:-1])
@@ -179,7 +197,7 @@ class RNN(nn.Module):
       word_idx = words[:, t].unsqueeze(1)
 
       if self.type.startswith('hmm'):
-        emit_ll, hidden_state = self.hmm_step(inp, hidden_state, emit_distr, word_idx)
+        emit_ll, hidden_state = self.hmm_step(inp, hidden_state, emit_weight, word_idx)
       else:
         emit_ll, hidden_state = self.rnn_step(inp, hidden_state, word_idx)
 
