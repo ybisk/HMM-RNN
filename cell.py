@@ -13,13 +13,12 @@ def apply_nonlin(state, nonlin):
 
 
 class ElmanCell(nn.Module):
-  def __init__(self, input_dim, hidden_dim, nonlin='tanh', feed_input=True,
-        trans_only_nonlin=False):
+  def __init__(self, input_dim, hidden_dim, nonlin='sigmoid', 
+               trans_only_nonlin=False):
     super(ElmanCell, self).__init__()
     self.input_dim = input_dim
     self.hidden_dim = hidden_dim
     self.nonlin = nonlin
-    self.feed_input = feed_input
     self.trans_only_nonlin = trans_only_nonlin
 
     self.input_tr = nn.Linear(input_dim, hidden_dim, bias=trans_only_nonlin)
@@ -31,24 +30,40 @@ class ElmanCell(nn.Module):
 
     if self.trans_only_nonlin:
       state = apply_nonlin(state, self.nonlin)
-      if self.feed_input: 
-        state = state + self.input_tr(inp)
-        # state = self.input_tr(inp) * state  # Yonatan's formulation
+      state = state + self.input_tr(inp)
+      # state = self.input_tr(inp) * state  # Yonatan's formulation
     else:
-      if self.feed_input:
-        state = state + self.input_tr(inp)
+      state = state + self.input_tr(inp)
       state = apply_nonlin(state, self.nonlin)
 
     return state
 
 
+class RationalCell(nn.Module):
+  def __init__(self, input_dim, hidden_dim, nonlin=''):
+    super(RationalCell, self).__init__()
+    self.input_dim = input_dim
+    self.hidden_dim = hidden_dim
+    self.nonlin = nonlin
+
+    self.input_tr = nn.Linear(input_dim, hidden_dim, bias=True)
+
+    self.forget_tr = nn.Linear(hidden_dim, hidden_dim, bias=True)
+
+  def forward(self, inp, state):
+    inp_rep = self.input_tr(inp)
+    inp_rep = apply_nonlin(inp_rep, self.nonlin)
+    forget_gate = self.forget_tr(inp)
+    state = forget_gate * state + (1 - forget_gate) * inp_rep
+    return state
+
+
 class JordanCell(nn.Module):
-  def __init__(self, input_dim, hidden_dim, nonlin='tanh', feed_input=True):
+  def __init__(self, input_dim, hidden_dim, nonlin='sigmoid'):
     super(JordanCell, self).__init__()
     self.input_dim = input_dim
     self.hidden_dim = hidden_dim
     self.nonlin = nonlin
-    self.feed_input = feed_input
 
     self.input_tr = nn.Linear(input_dim, hidden_dim, bias=False)
 
@@ -56,9 +71,7 @@ class JordanCell(nn.Module):
 
   def forward(self, inp, state):
     # Note: Assume weighted embedding averaging has already been done
-    state = self.transition(state)
-    if self.feed_input:
-      state = state + self.input_tr(inp)
+    state = self.transition(state) + self.input_tr(inp)
     state = apply_nonlin(state, self.nonlin)
     return state
 

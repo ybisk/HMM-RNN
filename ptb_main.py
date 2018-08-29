@@ -19,13 +19,11 @@ parser.add_argument('--save', type=str, default='model',
 parser.add_argument('--epochs', type=int, default=100, help='number of epochs')
 
 parser.add_argument('--type', type=str, default='hmm',
-                    help='hmm|hmm+1|jordan|elman|dist|gru|lstm|rnn-1|rnn-2')
+                    help='hmm|hmm+1|jordan|elman|rrnn|rrnn-1|rrnn-2|gru|lstm|rnn-1|rnn-2')
 parser.add_argument('--feeding', type=str, default='word',
                     help='none|word|encode-lstm')
 parser.add_argument('--glove-emb', action='store_true', default=False,
                     help='Use GloVe embeddings instead of learning embeddings.')
-parser.add_argument('--one-hot', action='store_true', default=False,
-                    help='1-hot clusters') #TODO not implemented any more
 parser.add_argument('--test', action='store_true', default=False,
                     help='Evaluate on test data')
 
@@ -34,17 +32,16 @@ parser.add_argument('--batch-size', type=int, default=20, help='batch size')
 parser.add_argument('--lr', type=float, default=0.01, help='initial learning rate')
 parser.add_argument('--hidden-dim', type=int, default=100, help='hidden dim (num clusters for HMM)')
 parser.add_argument('--embed-dim', type=int, default=100, help='embedding dim')
-parser.add_argument('--num-layers', type=int, default=1, help='number of layers')
 parser.add_argument('--clip', type=float, default=0.25, help='gradient clipping')
 parser.add_argument('--dropout', type=float, default=0.0,
                     help='dropout applied to layers (0 = no dropout)')
-
-parser.add_argument('--num_init_lr_epochs', type=int, default=0, 
-                    help='number of epochs before learning rate decay')
-parser.add_argument('--lr_decay', type=float, default=1.2,
+parser.add_argument('--lr-decay-rate', type=float, default=4.0,
                     help='learning rate decay per epoch')
-parser.add_argument('--reduce_lr', action='store_true', #true for pytorch LM optim
-                    help='reduce lr if val ppl does not improve')
+
+parser.add_argument('--fixed-decay', action='store_true', 
+                    help='follow fixed lr decay schedule (as in Zaremba et al)')
+parser.add_argument('--num-init-lr-epochs', type=int, default=6, 
+                    help='number of epochs before fixed learning rate decay')
 
 parser.add_argument('--initrange', type=float, default=1.0, 
                     help='initial param range')
@@ -78,8 +75,6 @@ torch.set_printoptions(threshold=1000, edgeitems=10)
 def output_fname():
   fname = "{}".format(args.type)
   fname += ".{}".format(args.note) if len(args.note) > 0 else ""
-  if args.one_hot:
-    fname += "_1hot"
   fname += "_{}".format(args.feeding)
   fname += "_l{}".format(args.max_len)
   fname += "_h{}".format(args.hidden_dim)
@@ -248,16 +243,16 @@ for epoch in range(args.epochs):
     with open(args.save + '.' + output_fname() + '.pt', 'wb') as f:
       torch.save(net, f)
     best_val_loss = val_loss
-    patient_count = 0
+    patience_count = 0
   else:
-    patient_count += 1
+    patience_count += 1
     # Anneal the learning rate if no improvement has been seen in the validation dataset.
-    if args.reduce_lr:
-      lr /= 4.0
+    if args.optim == 'sgd' and not args.fixed_decay:
+      lr /= args.lr_decay_rate
 
-  if (args.optim == 'sgd' and not args.reduce_lr and args.num_init_lr_epochs > 0 
+  if (args.optim == 'sgd' and args.fixed_decay 
       and epoch >= args.num_init_lr_epochs):
-    lr /= args.lr_decay
+    lr /= args.lr_decay_rate
 
   for param_group in optimizer.param_groups:
     param_group['lr'] = lr

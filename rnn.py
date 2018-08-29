@@ -24,29 +24,32 @@ class RNN(nn.Module):
           torch.from_numpy(np.load("inference/infer_glove.npy")))
       self.embed.requires_grad = False
 
+    # feeding is none doesn't make sense for RNNs
+    if (self.type == 'lstm' or self.type == 'gru' or self.type == 'jordan' or
+        self.type.startswith('rnn') or self.type.startswith('rrnn')):
+      assert self.feeding != 'none'
+
     if args.feeding == 'encode-lstm':
       self.encode_context = nn.LSTM(self.embed_dim, self.embed_dim, batch_first=True)
+    elif args.feeding.startswith('encode'):
+      assert False, 'Feeding encoding not implemented'
 
     # Transition cell
-    # TODO implement multiple layers
-    assert args.num_layers == 1
-    if 'hmm' in args.type:
+    if args.type.startswith('hmm'):
       self.trans = cell.HMMCell(self.embed_dim, self.hidden_dim, 
                                 logspace_hidden = self.logspace_hidden,
                                 feed_input = (self.feeding != 'none'), 
                                 delay_trans_softmax = (self.type == 'hmm+1'))
-    elif args.type == 'elman' or 'rnn' in args.type:
-      if args.type == 'rnn-1' or args.type == 'rnn-2': 
-        nonlin = 'softmax'
-      else:
-        nonlin = 'sigmoid'
+    elif args.type == 'elman' or args.type.startswith('rnn'):
+      nonlin = 'softmax' if args.type == 'rnn-1' or args.type == 'rnn-2' else 'sigmoid'
       self.trans = cell.ElmanCell(self.embed_dim, self.hidden_dim, nonlin,
-          feed_input = (self.feeding != 'none'), 
           trans_only_nonlin = (args.type == 'rnn-2'))
+    elif args.type.startswith('rrnn'):
+      nonlin = '' if args.type == 'rrnn-1' else 'tanh'
+      self.trans = cell.RationalCell(self.embed_dim, self.hidden_dim, nonlin)
     elif args.type == 'jordan':
       nonlin = 'tanh'
-      self.trans = cell.JordanCell(self.embed_dim, self.hidden_dim, nonlin,
-          feed_input = (self.feeding != 'none'))
+      self.trans = cell.JordanCell(self.embed_dim, self.hidden_dim, nonlin)
     elif args.type == 'gru':
       self.trans = nn.GRUCell(self.embed_dim, self.hidden_dim)
     elif args.type == 'lstm':
@@ -72,7 +75,7 @@ class RNN(nn.Module):
 
   def init_hidden_state(self, batch_size, inp=None):
     weight = next(self.parameters())
-    if 'hmm' in self.type:
+    if self.type.startswith('hmm'):
       # Uniform distribution over clusters
       if self.logspace_hidden:
         return weight.new_full((batch_size, self.hidden_dim), -np.log(self.hidden_dim))
@@ -95,7 +98,7 @@ class RNN(nn.Module):
 
   def embed_input(self, words):
     emb = self.embed(words)
-    if 'encode' in self.feeding:
+    if self.feeding.startswith('encode'):
       emb, _ = self.encode_context(embed)
     return emb.permute(0, 2, 1) # batch_size x embed_dim x seq_length 
 
@@ -111,7 +114,12 @@ class RNN(nn.Module):
       hidden_output = self.trans(state_input, hidden_state)
 
     # Emit
-    output = self.drop(hidden_output.clone())
+    if self.type == 'rrnn' or self.type == 'rrnn-1':
+      output = torch.tanh(hidden_output.clone())
+    else:
+      output = hidden_output.clone()
+
+    output = self.drop(output)
     logits = self.emit(output)
     emit_distr = F.log_softmax(logits, -1)        # Emission
 
@@ -156,11 +164,7 @@ class RNN(nn.Module):
     T = words.size()[1] # sequence length
     emit_marginal = None
 
-    # feeding is none doesn't make sense for RNNs, so why bother for LSTM/GRU?
-    if self.type == 'lstm' or self.type == 'gru':
-      assert self.feeding != 'none'
-
-    if 'hmm' in self.type:
+    if self.type.startswith('hmm'):
       # Emission distribution (input invariant)
       # dim vocab_size x hidden_size (opposite of layer def order)
       emit_weight = self.emit.weight + self.emit.bias.view(self.vocab_size, 1).expand(self.vocab_size, self.hidden_dim) 
@@ -174,7 +178,7 @@ class RNN(nn.Module):
       inp = emb[:,:,t-1]
       word_idx = words[:, t].unsqueeze(1)
 
-      if 'hmm' in self.type:
+      if self.type.startswith('hmm'):
         emit_ll, hidden_state = self.hmm_step(inp, hidden_state, emit_distr, word_idx)
       else:
         emit_ll, hidden_state = self.rnn_step(inp, hidden_state, word_idx)
