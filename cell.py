@@ -53,7 +53,7 @@ class RationalCell(nn.Module):
   def forward(self, inp, state):
     inp_rep = self.input_tr(inp)
     inp_rep = apply_nonlin(inp_rep, self.nonlin)
-    forget_gate = self.forget_tr(inp)
+    forget_gate = torch.sigmoid(self.forget_tr(inp))
     state = forget_gate * state + (1 - forget_gate) * inp_rep
     return state
 
