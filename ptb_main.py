@@ -37,7 +37,11 @@ parser.add_argument('--dropout', type=float, default=0.0,
                     help='dropout applied to layers (0 = no dropout)')
 parser.add_argument('--lr-decay-rate', type=float, default=4.0,
                     help='learning rate decay per epoch')
+parser.add_argument('--weight-decay', type=float, default=0.0,
+                    help='l2 weight decay for adam and variants')
 
+parser.add_argument('--checkpoint-decay', action='store_true', 
+                    help='Decay at checkpoints, following Melis et al')
 parser.add_argument('--fixed-decay', action='store_true', 
                     help='follow fixed lr decay schedule (as in Zaremba et al)')
 parser.add_argument('--num-init-lr-epochs', type=int, default=6, 
@@ -48,7 +52,7 @@ parser.add_argument('--initrange', type=float, default=1.0,
 parser.add_argument('--tie-embeddings', action='store_true',
                     help='tie the word embedding and softmax weights')
 parser.add_argument('--optim', type=str, default='adam',
-                    help='adam|sgd')
+                    help='adam|sgd|ramsprop')
 
 parser.add_argument('--patience', type=int, default=0, 
                     help='Stop training if not improving for some number of epochs')
@@ -110,7 +114,7 @@ def batchify(data, N):
   data = data.view(N, -1).contiguous()
   return data.to(device)
 
-eval_batch_size = 10
+eval_batch_size = 1
 train_data = batchify(corpus.train, args.batch_size)
 val_data = batchify(corpus.valid, eval_batch_size)
 test_data = batchify(corpus.test, eval_batch_size)
@@ -174,14 +178,25 @@ if args.write_graph:
 lr = args.lr
 
 if args.optim == 'adam':
-  optimizer = torch.optim.Adam(net.parameters(), lr=lr) #, weight_decay=1e-3)
+  optimizer = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=args.weight_decay)
+if args.optim == 'ramsprop':
+  optimizer = torch.optim.Adam(net.parameters(), lr=lr, betas=(0, 0.999), 
+                               weight_decay=args.weight_decay)
 else:
-  optimizer = torch.optim.SGD(net.parameters(), lr=lr) #, weight_decay=1e-3)
+  optimizer = torch.optim.SGD(net.parameters(), lr=lr)
+
+def zero_hidden():
+  if args.type == 'jordan':
+    return net.init_hidden_state(args.batch_size, train_data[:,0]) 
+  else:
+    return net.init_hidden_state(args.batch_size) 
 
 best_val_loss = None
-
 TBstep = 0
 patience_count = 0
+checkpoint_val_loss = None
+checkpoint_improve_count = 0
+
 for epoch in range(args.epochs):
   step = 0
   # Training
@@ -192,16 +207,16 @@ for epoch in range(args.epochs):
   total_loss = 0.0
   start_time = time.time()
 
-  if args.type == 'jordan':
-    hidden_state = net.init_hidden_state(args.batch_size, train_data[:,0]) 
-  else:
-    hidden_state = net.init_hidden_state(args.batch_size) 
- 
+  hidden_state = zero_hidden()
+
   inds = list(range(train_data.size(1) - 1))
-  iterate = tqdm.tqdm(range(0, len(inds) - len(inds)%args.max_len, args.max_len), ncols=80, disable=args.headless)
+  iterate = tqdm.tqdm(range(0, len(inds) - len(inds)%args.max_len, args.max_len), ncols=80, disable=True)
   for i in iterate:
     data_tensor = get_batch(train_data, i)
-    hidden_state = repackage_hidden(hidden_state)
+    if random.random() < 0.01:
+      hidden_state = zero_hidden()
+    else:
+      hidden_state = repackage_hidden(hidden_state)
     net.zero_grad()
     
     emit_marginal, hidden_state = net(data_tensor, hidden_state)
@@ -214,15 +229,24 @@ for epoch in range(args.epochs):
       torch.nn.utils.clip_grad_norm_(net.parameters(), args.clip)
     optimizer.step()
 
-    # Rather using SGD optimizer  
-    #if args.optim == 'sgd':
-    #  for p in net.parameters():
-    #    assert hasattr(p.grad, "data"), "Network parameter not in computation graph."
-    #    p.data.add_(-lr, p.grad.data)
-
     total_loss += loss.item()
-
     iterate.set_description("Loss {:8.4f}".format(loss.item()))
+    if args.checkpoint_decay and (TBstep + 1) % 100 == 0:
+      val_loss = evaluate(val_data)
+      if not checkpoint_val_loss or val_loss < checkpoint_val_loss:
+        if checkpoint_val_loss is not None:
+          h_print("%d, %.2f, %2.f" % (checkpoint_improve_count, val_loss,
+                                 checkpoint_val_loss))
+        checkpoint_val_loss = val_loss
+        checkpoint_improve_count = 0
+      else:
+        checkpoint_improve_count += 1
+      if checkpoint_improve_count == 30: # hard-coded
+        lr /= args.lr_decay_rate
+        h_print("Decay LR to %.4f at loss %.3f" % (lr, val_loss))
+        for param_group in optimizer.param_groups:
+          param_group['lr'] = lr
+      net.train()  
 
     step += 1
     TBstep += 1
@@ -249,8 +273,9 @@ for epoch in range(args.epochs):
   else:
     patience_count += 1
     # Anneal the learning rate if no improvement has been seen in the validation dataset.
-    if args.optim == 'sgd' and not args.fixed_decay:
+    if not (args.optim == 'adam' or args.fixed_decay or args.checkpoint_decay):
       lr /= args.lr_decay_rate
+      h_print("Decay LR to %.4f" % lr)
 
   if (args.optim == 'sgd' and args.fixed_decay 
       and epoch >= args.num_init_lr_epochs):

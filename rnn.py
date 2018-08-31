@@ -53,6 +53,7 @@ class RNN(nn.Module):
     elif args.type == 'gru':
       self.trans = nn.GRUCell(self.embed_dim, self.hidden_dim)
     elif args.type == 'lstm':
+      #self.trans = nn.LSTM(self.embed_dim, self.hidden_dim)
       self.trans = nn.LSTMCell(self.embed_dim, self.hidden_dim)
     else: 
       print(args.type + " is not implemented")
@@ -87,6 +88,8 @@ class RNN(nn.Module):
       state.scatter_(1, inp.view(batch_size, 1), 1)
       return state
     elif self.type == 'lstm':
+      #return (weight.new_zeros((1, batch_size, self.hidden_dim)),
+      #        weight.new_zeros((1, batch_size, self.hidden_dim)))
       return (weight.new_zeros((batch_size, self.hidden_dim)),
               weight.new_zeros((batch_size, self.hidden_dim)))
     else:
@@ -105,7 +108,10 @@ class RNN(nn.Module):
   def rnn_step(self, state_input, hidden_state, word_idx):
     # Transition
     if self.type == 'lstm':
-      hidden_output, hidden_memcell = self.trans(state_input, hidden_state)
+      #hidden_output, hidden_cell_state = self.trans(state_input.unsqueeze(0), 
+      #                                           hidden_state)
+      #hidden_output = hidden_output.squeeze(0)
+      hidden_output, hidden_memstate = self.trans(state_input, hidden_state)
     elif self.type == 'jordan':
       #TODO move to cell if we can tie weights
       hidden_input_state = hidden_state @ self.embed.weight
@@ -127,7 +133,8 @@ class RNN(nn.Module):
 
     # State Update
     if self.type == 'lstm':
-      hidden_state = (hidden_output, hidden_memcell)
+      #hidden_state = hidden_cell_state
+      hidden_state = (hidden_output, hidden_memstate)
     elif self.type == 'jordan':
       hidden_state = F.softmax(logits, -1) # not log_softmax
     else:
