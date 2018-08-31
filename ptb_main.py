@@ -92,9 +92,14 @@ def output_fname():
 if args.glove_emb:
   assert args.embed_dim == 100
 
+if args.headless:
+  log_file = open(output_fname() + ".log", 'w')
+
 def h_print(s):
   if not args.headless:
     print(s)
+  else:
+    log_file.write(s + "\n")
 
 writer = SummaryWriter(args.log + output_fname())
 
