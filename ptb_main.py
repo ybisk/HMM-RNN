@@ -166,7 +166,7 @@ def evaluate(data_source):
       data_tensor = get_batch(data_source, i)
       emit_marginal, hidden_state = net(data_tensor, hidden_state)  
       loss = -1 * torch.mean(emit_marginal)
-      total_loss += loss.item() * data_tensor.size()[1]
+      total_loss += loss.item() * (data_tensor.size()[1] -1) 
       hidden_state = repackage_hidden(hidden_state)
   return total_loss / (data_source.size(1) - 1)
 
