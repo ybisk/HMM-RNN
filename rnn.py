@@ -39,14 +39,18 @@ class RNN(nn.Module):
       self.trans = cell.HMMCell(self.embed_dim, self.hidden_dim, 
                                 logspace_hidden = self.logspace_hidden,
                                 feed_input = (self.feeding != 'none'), 
-                                delay_trans_softmax = (self.type == 'hmm+1'))
+                                delay_trans_softmax = (self.type == 'hmm+1'),
+                                with_trans_gate = (self.type == 'hmm-g'))
     elif args.type == 'elman' or args.type.startswith('rnn'):
       nonlin = 'softmax' if args.type == 'rnn-1' or args.type == 'rnn-2' else 'sigmoid'
       self.trans = cell.ElmanCell(self.embed_dim, self.hidden_dim, nonlin,
           trans_only_nonlin = (args.type == 'rnn-2'))
     elif args.type.startswith('rrnn'):
-      nonlin = '' if args.type == 'rrnn-1' else 'tanh'
+      nonlin = '' if args.type == 'rrnn-1' or args.type == 'rrnn-r' else 'tanh'
       self.trans = cell.RationalCell(self.embed_dim, self.hidden_dim, nonlin)
+      if args.type == 'rrnn-r':
+        self.reset_tr = nn.Linear(self.hidden_dim, self.hidden_dim, bias=True)
+        assert self.hidden_dim == self.embed_dim
     elif args.type == 'jordan':
       nonlin = 'tanh'
       self.trans = cell.JordanCell(self.embed_dim, self.hidden_dim, nonlin)
@@ -122,6 +126,10 @@ class RNN(nn.Module):
     # Emit
     if self.type == 'rrnn' or self.type == 'rrnn-1':
       output = torch.tanh(hidden_output.clone())
+    elif self.type == 'rrnn-r':
+      # apply reset gate
+      reset_gate = torch.sigmoid(self.reset_tr(state_input))
+      output = reset_gate * hidden_output + (1 - reset_gate) * state_input
     else:
       output = hidden_output.clone()
 

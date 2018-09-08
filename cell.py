@@ -78,18 +78,26 @@ class JordanCell(nn.Module):
 
 class HMMCell(nn.Module):
   def __init__(self, input_dim, hidden_dim, logspace_hidden=False,
-               feed_input=True, delay_trans_softmax=False):
+               feed_input=True, delay_trans_softmax=False,
+               with_trans_gate=False):
     super(HMMCell, self).__init__()
     self.input_dim = input_dim
     self.hidden_dim = hidden_dim
+    self.logspace_hidden = logspace_hidden
     self.feed_input = feed_input
     self.delay_trans_softmax = delay_trans_softmax
-    self.logspace_hidden = logspace_hidden
+    self.with_trans_gate = with_trans_gate
+   
+    assert not (with_trans_gate and (delay_trans_softmax or not logspace_hidden))
 
     if feed_input:
       self.transition = nn.Linear(self.input_dim, self.hidden_dim**2, bias=True)
     else:
+      print("No feed input HMM cell.")
       self.transition = nn.Linear(1, self.hidden_dim**2, bias=False)
+
+    if with_trans_gate:
+      self.gate_tr = nn.Linear(hidden_dim, hidden_dim, bias=True)
 
     self.init_weights()
 
@@ -113,7 +121,16 @@ class HMMCell(nn.Module):
         state = F.softmax(state, dim=1)
     else:     
       if self.logspace_hidden:
-        trans_distr = F.log_softmax(trans_distr, dim=1)
+        if self.with_trans_gate:
+          gate = torch.sigmoid(self.gate_tr(inp)) # each gate element scales distrubution given previous hidden state
+          trans_distr = trans_distr * gate.view(batch_size, self.hidden_dim, 1).expand(
+                  batch_size, self.hidden_dim, self.hidden_dim)
+          # Note that at the moment we have to apply the gate before softmaxing
+          trans_distr = F.log_softmax(trans_distr, dim=1)
+        else:
+          trans_distr = F.log_softmax(trans_distr, dim=1)
+
+
         state = trans_distr + state.view(batch_size, 1, self.hidden_dim).expand(batch_size, self.hidden_dim, self.hidden_dim).clone()
         state = torch.logsumexp(state, 2)
       else:    
