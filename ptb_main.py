@@ -137,6 +137,7 @@ def print_emissions(net, fname, i2voc):
   o.close()
 
 vocab_size = len(corpus.dict)
+print("Vocab size: %d" % vocab_size)
 
 net = rnn.RNN(vocab_size, args).to(device)
 
@@ -259,12 +260,12 @@ for epoch in range(args.epochs):
 
   cur_loss = total_loss / step # loss calculation might be approximate
   elapsed = time.time() - start_time
-  h_print('| epoch {:3d} | {:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | loss {:5.2f} | ppl {:8.2f}'.format(
-        epoch, step, lr, elapsed * 1000 / step, cur_loss, math.exp(cur_loss)))
+  h_print('| epoch {:3d} | {:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | loss {:5.2f} | ppl {:8.2f} | bpc {:4.4f}'.format(
+        epoch, step, lr, elapsed * 1000 / step, cur_loss, math.exp(cur_loss), cur_loss / math.log(2)))
     
   val_loss = evaluate(val_data)
-  h_print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f}'.format(
-        epoch, (time.time() - start_time), val_loss, math.exp(val_loss)))
+  h_print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f} | valid bpc {:4.4f}'.format(
+        epoch, (time.time() - start_time), val_loss, math.exp(val_loss), val_loss / math.log(2)))
 
   writer.add_scalar('Prp_Train', math.exp(cur_loss), epoch)
   writer.add_scalar('Prp_Val', math.exp(val_loss), epoch)
@@ -310,8 +311,8 @@ if args.test:
   # Run on test data.
   test_loss = evaluate(test_data)
   h_print('=' * 89)
-  h_print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
-      test_loss, math.exp(test_loss)))
+  h_print('| End of training | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:4.4f}'.format(
+      test_loss, math.exp(test_loss), test_loss / math.log(2)))
   h_print('=' * 89)
 
 writer.close()
