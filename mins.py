@@ -27,8 +27,13 @@ for root, dirs, files in os.walk("."):
       except FileNotFoundError:
         continue
 
-
 results.sort()
 for valid, train, fname in results:
-  print("{:60} {:7.3f}   {:7.3f}".format(fname, train, valid))
+  fname = fname.replace("l35_","")
+  fname = fname.replace(prefix + "_", "")
+  fname = fname.replace(".log","")
+  fname = fname.split("_")
+  fname = " ".join(["{:8s}".format(v) for v in fname])
+
+  print("{:50} {:9.3f}   {:9.3f}".format(fname, train, valid))
 
