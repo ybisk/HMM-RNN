@@ -89,6 +89,8 @@ def output_fname():
   fname += "_lr{}".format(args.lr)
   fname += "_drop{}".format(args.dropout)
   fname += "_{}".format(args.optim)
+  fname += "_wd{}".format(args.weight_decay)
+  fname += "_pat{}".format(args.patience)
   if args.tie_embeddings:
     fname += "_tieE"
   return fname
