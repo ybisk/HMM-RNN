@@ -35,13 +35,19 @@ class RNN(nn.Module):
       assert False, 'Feeding encoding not implemented'
 
     # Transition cell
-    if args.type.startswith('hmm') or args.type.startswith('rnn-hmm'):
+    if args.type.startswith('hmm-new'):
+      assert self.hidden_dim == self.embed_dim and args.tie_embeddings
+      self.trans = cell.HMMNewCell(self.hidden_dim, 
+                                   logspace_hidden = self.logspace_hidden,
+                                   feed_input = (self.feeding != 'none'), 
+                                   combine_input = (self.type == 'hmm-new-c'))
+    elif args.type.startswith('hmm') or args.type.startswith('rnn-hmm'):
       self.trans = cell.HMMCell(self.embed_dim, self.hidden_dim, 
                                 logspace_hidden = self.logspace_hidden,
                                 feed_input = (self.feeding != 'none'), 
                                 delay_trans_softmax = (self.type == 'hmm+1'),
                                 with_trans_gate = (self.type == 'hmm-g'))
-    elif args.type == 'elman' or args.type.startswith('rnn'):
+    elif args.type.startswith('elman') or args.type.startswith('rnn'):
       nonlin = 'softmax' if args.type == 'rnn-1' or args.type == 'rnn-2' else 'sigmoid'
       self.trans = cell.ElmanCell(self.embed_dim, self.hidden_dim, nonlin,
           trans_only_nonlin = (args.type == 'rnn-2'))
@@ -109,7 +115,7 @@ class RNN(nn.Module):
       emb, _ = self.encode_context(emb)
     return emb.permute(0, 2, 1) # batch_size x embed_dim x seq_length 
 
-  def rnn_step(self, state_input, hidden_state, word_idx):
+  def rnn_step(self, state_input, hidden_state, word_idx, current_embed=None):
     # Transition
     if self.type == 'lstm':
       #hidden_output, hidden_cell_state = self.trans(state_input.unsqueeze(0), 
@@ -133,11 +139,17 @@ class RNN(nn.Module):
     else:
       output = hidden_output.clone()
 
-    output = self.drop(output)
-    logits = self.emit(output)
-    emit_distr = F.log_softmax(logits, -1)        # Emission
+    if self.type == 'elman-hmm-emit':
+      # First normalize sigmoid hidden output
+      output = torch.log(F.normalize(output, 1, 1))
 
-    emit_ll = emit_distr.gather(1, word_idx).squeeze()           # Word Prob
+      joint_state_ll = output + current_embed
+      emit_ll = torch.logsumexp(joint_state_ll, 1)
+    else:    
+      output = self.drop(output)
+      logits = self.emit(output)
+      emit_distr = F.log_softmax(logits, -1)        # Emission
+      emit_ll = emit_distr.gather(1, word_idx).squeeze()           # Word Prob
 
     # State Update
     if self.type == 'lstm':
@@ -191,30 +203,62 @@ class RNN(nn.Module):
 
     return emit_ll, hidden_state
 
+  def new_hmm_step(self, prev_embed, current_embed, hidden_state, word_idx):
+    N = hidden_state.size()[0] # batch size
+
+    # Transition
+    hidden_output = self.trans(prev_embed, hidden_state)
+
+    # Emit 
+    if self.type == 'hmm-new-rnn-emit':
+      output = self.drop(hidden_output)
+      logits = self.emit(torch.exp(output)) # need state as probabilities here
+      emit_distr = F.log_softmax(logits, -1)
+      emit_ll = emit_distr.gather(1, word_idx).squeeze()
+    else:
+      joint_state_ll = hidden_output + current_embed
+      emit_ll = torch.logsumexp(joint_state_ll, 1)
+
+    return emit_ll, hidden_output
+
   def forward(self, words, hidden_state):
     N = words.size()[0] # batch size
     T = words.size()[1] # sequence length
     emit_marginal = None
 
-    if self.type.startswith('hmm'):
+    if self.type.startswith('hmm') or self.type == 'elman-hmm-emit':
       # Emission distribution (input invariant)
       # dim vocab_size x hidden_size (opposite of layer def order)
       emit_weight = self.emit.weight + self.emit.bias.view(self.vocab_size, 1).expand(self.vocab_size, self.hidden_dim) 
-      if not self.type == 'hmm+2': # else delay emit softmax
+      if not self.type == 'hmm+2': # delay emit softmax
         emit_weight = F.log_softmax(emit_weight, 0) 
 
     # Embed
-    emb = self.embed_input(words[:,:-1])
-    emb = self.drop(emb)
+    if self.type.startswith('hmm-new'):
+      word_idx = words[:, 0].unsqueeze(1).expand(N, self.hidden_dim)
+      current_embed = emit_weight.gather(0, word_idx) # batch_size x hidden_dim
+    else:    
+      emb = self.embed_input(words[:,:-1])
+      emb = self.drop(emb)
 
     for t in range(1, T):
-      inp = emb[:,:,t-1]
       word_idx = words[:, t].unsqueeze(1)
+      
+      if self.type.startswith('hmm-new'): 
+        prev_embed = current_embed
+        current_embed = emit_weight.gather(0, word_idx.expand(N, self.hidden_dim))
+      else:
+        inp = emb[:,:,t-1]
+        if self.type == 'elman-hmm-emit':
+          current_embed = emit_weight.gather(0, word_idx.expand(N, self.hidden_dim))
 
-      if self.type.startswith('hmm'):
+      if self.type.startswith('hmm-new'):
+        emit_ll, hidden_state = self.new_hmm_step(prev_embed, current_embed, hidden_state, word_idx)
+      elif self.type.startswith('hmm'):
         emit_ll, hidden_state = self.hmm_step(inp, hidden_state, emit_weight, word_idx)
       else:
-        emit_ll, hidden_state = self.rnn_step(inp, hidden_state, word_idx)
+        emit_ll, hidden_state = self.rnn_step(inp, hidden_state, word_idx,
+                current_embed = (current_embed if self.type == 'elman-hmm-emit' else None))
 
       if t == 1:
         emit_marginal = emit_ll

@@ -19,7 +19,7 @@ parser.add_argument('--save', type=str, default='model',
 parser.add_argument('--epochs', type=int, default=100, help='number of epochs')
 
 parser.add_argument('--type', type=str, default='hmm',
-                    help='hmm|hmm+1|hmm+2|hmm-1|hmm-g|jordan|elman|rnn-hmm|rrnn|rrnn-1|rrnn-2|gru|lstm|rnn-1|rnn-2')
+                    help='hmm-new|hmm-new-c|hmm-new-rnn-emit|hmm|hmm+1|hmm+2|hmm-1|hmm-g|jordan|elman|elman-hmm-emit|rnn-hmm|rrnn|rrnn-1|rrnn-2|gru|lstm|rnn-1|rnn-2')
 parser.add_argument('--feeding', type=str, default='word',
                     help='none|word|encode-lstm')
 parser.add_argument('--glove-emb', action='store_true', default=False,

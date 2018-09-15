@@ -139,3 +139,57 @@ class HMMCell(nn.Module):
 
     return state.view(batch_size, self.hidden_dim)
 
+
+class HMMNewCell(nn.Module):
+  def __init__(self, hidden_dim, logspace_hidden=False,
+               feed_input=False, combine_input=False):
+    super(HMMNewCell, self).__init__()
+    self.hidden_dim = hidden_dim
+    self.logspace_hidden = logspace_hidden
+    self.feed_input = feed_input
+    self.combine_input = combine_input
+    assert not (feed_input and combine_input)
+   
+    if feed_input:
+      self.transition = nn.Linear(self.hidden_dim, self.hidden_dim**2, bias=True)
+    else:
+      self.transition = nn.Linear(1, self.hidden_dim**2, bias=False)
+
+    if combine_input:
+      self.input_tr = nn.Linear(hidden_dim, hidden_dim, bias=True)
+
+    self.init_weights()
+
+  def init_weights(self, initrange=1.0):
+    self.transition.weight.data.uniform_(-initrange, initrange)   # 0 to e (logspace)
+
+  def forward(self, inp, state):
+    # assume input is log_softmax(E)[prev_word]
+    batch_size = state.size()[0]
+
+    trans_inp = inp if self.feed_input else inp.new_ones((batch_size, 1))
+    trans_distr = self.transition(trans_inp).view(batch_size, self.hidden_dim, 
+                                            self.hidden_dim)
+
+    inp_state = inp + state
+    if self.logspace_hidden:
+      inp_state = F.log_softmax(inp_state, dim=1)
+    else:
+      inp_state = F.softmax(inp_state, dim=1)
+
+    if self.combine_input:
+      # each input transtions element scales distrubution given previous hidden state
+      trans_distr += self.input_tr(torch.exp(inp)).view(batch_size, self.hidden_dim, 1) #expand
+
+    if self.logspace_hidden:
+      trans_distr = F.log_softmax(trans_distr, dim=1)
+      next_state = trans_distr + inp_state.view(batch_size, 1, self.hidden_dim)
+            #.expand(batch_size, self.hidden_dim, self.hidden_dim)
+      next_state = torch.logsumexp(next_state, 2)
+    else:
+      trans_distr = F.softmax(trans_distr, dim=1)
+      next_state = trans_distr @ inp_state.unsqueeze(2) 
+      next_state = torch.log(next_state)
+
+    return next_state.view(batch_size, self.hidden_dim)
+
