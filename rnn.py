@@ -50,7 +50,8 @@ class RNN(nn.Module):
     elif args.type.startswith('elman') or args.type.startswith('rnn'):
       nonlin = 'softmax' if args.type == 'rnn-1' or args.type == 'rnn-2' else 'sigmoid'
       self.trans = cell.ElmanCell(self.embed_dim, self.hidden_dim, nonlin,
-          trans_only_nonlin = (args.type == 'rnn-2'))
+          trans_only_nonlin = (args.type == 'rnn-2'), multiplicative =
+          (args.type == 'rnn-3'))
     elif args.type.startswith('rrnn'):
       nonlin = '' if args.type == 'rrnn-1' or args.type == 'rrnn-r' else 'tanh'
       self.trans = cell.RationalCell(self.embed_dim, self.hidden_dim, nonlin)
