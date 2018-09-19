@@ -14,7 +14,7 @@ class RNN(nn.Module):
     self.type = args.type
     self.feeding = args.feeding 
     self.glove_emb = args.glove_emb
-    self.logspace_hidden = False
+    self.logspace_hidden = True
 
     self.drop = nn.Dropout(args.dropout)
     # Input embedding parameters
@@ -161,7 +161,7 @@ class RNN(nn.Module):
     else:
       hidden_state = hidden_output 
 
-    return emit_ll, hidden_state
+    return emit_ll, hidden_state, emit_distr.squeeze()
 
   def hmm_step(self, state_input, hidden_state, emit_distr, word_idx):
     N = word_idx.size()[0] # batch size
@@ -201,8 +201,14 @@ class RNN(nn.Module):
 
     if not self.logspace_hidden:
       hidden_state = torch.exp(hidden_state)
+        
+    max_c = True
+    if max_c:
+      marginal = emit_distr[:,torch.argmax(hidden_state, dim=1)]
+    else:
+      marginal = emit_distr @ hidden_state.transpose(0,1)
 
-    return emit_ll, hidden_state
+    return emit_ll, hidden_state, marginal.squeeze()
 
   def new_hmm_step(self, prev_embed, current_embed, hidden_state, word_idx):
     N = hidden_state.size()[0] # batch size
@@ -222,10 +228,11 @@ class RNN(nn.Module):
 
     return emit_ll, hidden_output
 
-  def forward(self, words, hidden_state):
+  def forward(self, words, hidden_state, emit=False):
     N = words.size()[0] # batch size
     T = words.size()[1] # sequence length
     emit_marginal = None
+    emissions = np.zeros((N,T))
 
     if self.type.startswith('hmm') or self.type == 'elman-hmm-emit':
       # Emission distribution (input invariant)
@@ -256,9 +263,9 @@ class RNN(nn.Module):
       if self.type.startswith('hmm-new'):
         emit_ll, hidden_state = self.new_hmm_step(prev_embed, current_embed, hidden_state, word_idx)
       elif self.type.startswith('hmm'):
-        emit_ll, hidden_state = self.hmm_step(inp, hidden_state, emit_weight, word_idx)
+        emit_ll, hidden_state, emit_distr = self.hmm_step(inp, hidden_state, emit_weight, word_idx)
       else:
-        emit_ll, hidden_state = self.rnn_step(inp, hidden_state, word_idx,
+        emit_ll, hidden_state, emit_distr = self.rnn_step(inp, hidden_state, word_idx,
                 current_embed = (current_embed if self.type == 'elman-hmm-emit' else None))
 
       if t == 1:
@@ -266,5 +273,9 @@ class RNN(nn.Module):
       else:
         emit_marginal = emit_marginal + emit_ll
 
-    return emit_marginal / (T - 1), hidden_state
+      if emit:
+        emissions[:,t-1] = torch.argmax(emit_distr).cpu().numpy()
 
+    if emit:
+      return emit_marginal / (T - 1), hidden_state, emissions
+    return emit_marginal / (T - 1), hidden_state

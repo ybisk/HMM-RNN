@@ -26,6 +26,7 @@ parser.add_argument('--glove-emb', action='store_true', default=False,
                     help='Use GloVe embeddings instead of learning embeddings.')
 parser.add_argument('--test', action='store_true', default=False,
                     help='Evaluate on test data')
+parser.add_argument('--test-model', type=str)
 
 parser.add_argument('--max-len', type=int, default=35, help='max / BPTT seq len')
 parser.add_argument('--batch-size', type=int, default=20, help='batch size')
@@ -124,7 +125,9 @@ def batchify(data, N):
 eval_batch_size = 1
 train_data = batchify(corpus.train, args.batch_size)
 val_data = batchify(corpus.valid, eval_batch_size)
+val_tags = batchify(corpus.valid_tags, eval_batch_size)
 test_data = batchify(corpus.test, eval_batch_size)
+test_tags = batchify(corpus.test_tags, eval_batch_size)
 
 def print_emissions(net, fname, i2voc):
   o = open("Emissions.{}.txt".format(fname),'w')
@@ -150,14 +153,19 @@ def repackage_hidden(h):
   else:
     return tuple(repackage_hidden(v) for v in h)
 
-def get_batch(source, i):
+def get_batch(source, i, tag_source=None):
   seq_len = min(args.max_len, source.size()[1] - 1 - i)
   data = source[:,i:i+seq_len+1]
+  if tag_source is not None:
+    tags = tag_source[:,i:i+seq_len+1]
+    return data, tags
   return data
 
-def evaluate(data_source):
+def evaluate(data_source, data_tags):
   net.eval()
   total_loss = 0.0
+  total_corr = 0
+  total_item = 0
 
   if args.type == 'jordan':
     hidden_state = net.init_hidden_state(eval_batch_size, data_source[:,0])
@@ -166,12 +174,22 @@ def evaluate(data_source):
 
   with torch.no_grad():
     for i in range(0, data_source.size(1) - 1, args.max_len):
-      data_tensor = get_batch(data_source, i)
-      emit_marginal, hidden_state = net(data_tensor, hidden_state)  
+      data_tensor, tags_tensor = get_batch(data_source, i, data_tags)
+      emit_marginal, hidden_state, emissions = net(data_tensor, hidden_state, True)  
       loss = -1 * torch.mean(emit_marginal)
       total_loss += loss.item() * (data_tensor.size()[1] -1) 
+
+      emissions = emissions.squeeze()
+      tags_tensor = tags_tensor.squeeze().cpu().numpy()
+      for i in range(len(emissions.squeeze())):
+        p = int(emissions[i])
+        g = tags_tensor[i]
+        #print(p, g, corpus.dict.i2voc[p], corpus.dict.i2voc[g])
+        total_corr += 1 if (g != 0 and corpus.dict.tagDict[p] == g or g == p) else 0
+        total_item += 1
+      
       hidden_state = repackage_hidden(hidden_state)
-  return total_loss / (data_source.size(1) - 1)
+  return total_loss / (data_source.size(1) - 1), total_corr/total_item
 
 num_parameters = sum(p.numel() for p in net.parameters() if p.requires_grad)
 h_print("Trainable parameters: %d" % num_parameters)
@@ -227,7 +245,7 @@ for epoch in range(args.epochs):
       hidden_state = repackage_hidden(hidden_state)
     net.zero_grad()
     
-    emit_marginal, hidden_state = net(data_tensor, hidden_state)
+    emit_marginal, hidden_state = net(data_tensor, hidden_state, False)
 
     # emit_marginal[emit_marginal != emit_marginal] = 0 # hack to avoid NaNs
     loss = -1 * torch.mean(emit_marginal)
@@ -240,7 +258,7 @@ for epoch in range(args.epochs):
     total_loss += loss.item()
     iterate.set_description("Loss {:8.4f}".format(loss.item()))
     if args.checkpoint_decay and (TBstep + 1) % 100 == 0:
-      val_loss = evaluate(val_data)
+      val_loss, _ = evaluate(val_data, val_tags)
       if not checkpoint_val_loss or val_loss < checkpoint_val_loss:
         if checkpoint_val_loss is not None:
           h_print("%d, %.2f, %2.f" % (checkpoint_improve_count, val_loss,
@@ -265,12 +283,13 @@ for epoch in range(args.epochs):
   h_print('| epoch {:3d} | {:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | loss {:5.2f} | ppl {:8.2f} | bpc {:4.4f}'.format(
         epoch, step, lr, elapsed * 1000 / step, cur_loss, math.exp(cur_loss), cur_loss / math.log(2)))
     
-  val_loss = evaluate(val_data)
-  h_print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f} | valid bpc {:4.4f}'.format(
-        epoch, (time.time() - start_time), val_loss, math.exp(val_loss), val_loss / math.log(2)))
+  val_loss, val_acc = evaluate(val_data, val_tags)
+  h_print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f} | valid bpc {:4.4f} | valid acc {:4.4f}'.format(
+        epoch, (time.time() - start_time), val_loss, math.exp(val_loss), val_loss / math.log(2), val_acc))
 
   writer.add_scalar('Prp_Train', math.exp(cur_loss), epoch)
   writer.add_scalar('Prp_Val', math.exp(val_loss), epoch)
+  writer.add_scalar('Prp_Acc', math.exp(val_acc), epoch)
 
   # Save the model if the validation loss is the best we've seen so far.
   if not best_val_loss or val_loss < best_val_loss:
@@ -304,17 +323,19 @@ for epoch in range(args.epochs):
 
 if args.test:
   # Load the best saved model.
-  with open(args.save + '.' + output_fname() + '.pt', 'rb') as f:
+  #with open(args.save + '.' + output_fname() + '.pt', 'rb') as f:
+  with open(args.test_model, 'rb') as f:
       net = torch.load(f)
       # after load the rnn params are not a continuous chunk of memory
       # this makes them a continuous chunk, and will speed up forward pass
       # net.rnn.flatten_parameters() #TODO
 
   # Run on test data.
-  test_loss = evaluate(test_data)
+  #test_loss, test_acc = evaluate(test_data, test_tags)
+  test_loss, test_acc = evaluate(val_data, val_tags)
   h_print('=' * 89)
-  h_print('| End of training | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:4.4f}'.format(
-      test_loss, math.exp(test_loss), test_loss / math.log(2)))
+  h_print('| End of training | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:4.4f} | test acc {:4.4f}'.format(
+      test_loss, math.exp(test_loss), test_loss / math.log(2), test_acc))
   h_print('=' * 89)
 
 writer.close()
