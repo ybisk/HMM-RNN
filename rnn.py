@@ -163,7 +163,7 @@ class RNN(nn.Module):
     else:
       hidden_state = hidden_output 
 
-    return emit_ll, hidden_state, emit_distr.squeeze()
+    return emit_ll, hidden_state, torch.exp(emit_distr).squeeze()
 
   def hmm_step(self, state_input, hidden_state, emit_distr, word_idx, compute_emit=False):
     N = word_idx.size()[0] # batch size
@@ -203,13 +203,17 @@ class RNN(nn.Module):
 
     if not self.logspace_hidden:
       hidden_state = torch.exp(hidden_state)
-        
+
     if compute_emit:
-      max_c = True
-      if max_c:
-        marginal = emit_distr[:,torch.argmax(hidden_state, dim=1)]
-      else:
+      # Hidden state is now a distribution
+      # emit distr is now a distribution
+      emit_distr = torch.exp(emit_distr)
+
+      use_marginal = False
+      if use_marginal:
         marginal = emit_distr @ hidden_state.transpose(0,1)
+      else:
+        marginal = emit_distr[:,torch.argmax(hidden_state, dim=1)]
 
       return emit_ll, hidden_state, marginal.squeeze()
     else:
@@ -236,8 +240,13 @@ class RNN(nn.Module):
   def forward(self, words, hidden_state, compute_emit=False):
     N = words.size()[0] # batch size
     T = words.size()[1] # sequence length
+    t = len(self.corpus.dict.i2tag)
     emit_marginal = None
-    emissions = np.zeros((N,T))
+
+    if self.syn_type == "accuracy":
+      emissions = np.zeros((N,T-1))
+    else:
+      emissions = np.zeros((N,T-1,t))
 
     if self.type.startswith('hmm') or self.type == 'elman-hmm-emit':
       # Emission distribution (input invariant)
@@ -280,7 +289,10 @@ class RNN(nn.Module):
         emit_marginal = emit_marginal + emit_ll
 
       if compute_emit:
-        emissions[:,t-1] = torch.argmax(emit_distr).cpu().numpy()
+        if self.syn_type == "accuracy":
+          emissions[:,t-1] = torch.argmax(emit_distr).cpu().numpy()
+        else:
+          emissions[:, t-1, :] = emit_distr.cpu().numpy() @ self.corpus.dict.tag_embed
 
     if compute_emit:
       return emit_marginal / (T - 1), hidden_state, emissions
