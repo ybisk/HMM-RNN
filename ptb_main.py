@@ -185,7 +185,7 @@ def evaluate(data_source, data_tags):
         p = int(emissions[i])
         g = tags_tensor[i]
         #print(p, g, corpus.dict.i2voc[p], corpus.dict.i2voc[g])
-        total_corr += 1 if (g != 0 and corpus.dict.tagDict[p] == g or g == p) else 0
+        total_corr += 1 if (p in corpus.dict.tagDict and g != 0 and corpus.dict.tagDict[p] == g or g == p) else 0
         total_item += 1
       
       hidden_state = repackage_hidden(hidden_state)
