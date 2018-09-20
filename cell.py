@@ -12,6 +12,21 @@ def apply_nonlin(state, nonlin):
   return state
 
 
+class BigramCell(nn.Module):
+  def __init__(self, input_dim, hidden_dim, nonlin='sigmoid'):
+    super(BigramCell, self).__init__()
+    self.input_dim = input_dim
+    self.hidden_dim = hidden_dim
+    self.nonlin = nonlin
+
+    self.input_tr = nn.Linear(input_dim, hidden_dim, bias=True)
+
+  def forward(self, inp, state):
+    state = self.input_tr(inp)
+    state = apply_nonlin(state, self.nonlin)
+    return state
+
+
 class ElmanCell(nn.Module):
   def __init__(self, input_dim, hidden_dim, nonlin='sigmoid', 
                trans_only_nonlin=False, multiplicative=False):

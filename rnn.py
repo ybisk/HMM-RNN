@@ -58,6 +58,8 @@ class RNN(nn.Module):
       if args.type == 'rrnn-r':
         self.reset_tr = nn.Linear(self.hidden_dim, self.hidden_dim, bias=True)
         assert self.hidden_dim == self.embed_dim
+    elif args.type == 'bigram':
+      self.trans = cell.BigramCell(self.embed_dim, self.hidden_dim, 'sigmoid')
     elif args.type == 'jordan':
       nonlin = 'tanh'
       self.trans = cell.JordanCell(self.embed_dim, self.hidden_dim, nonlin)

@@ -55,7 +55,7 @@ class Corpus(object):
 
     # Mapping
     self.dict.i2tag = list(tagset)
-    print(self.dict.i2tag)
+    #print(self.dict.i2tag)
     self.dict.tag2i = {}
     for i in range(len(self.dict.i2tag)):
       self.dict.tag2i[self.dict.i2tag[i]] = i
