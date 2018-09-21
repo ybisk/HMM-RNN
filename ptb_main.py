@@ -64,7 +64,7 @@ parser.add_argument('--note', type=str, default='',
                     help='extra note on fname')
 parser.add_argument('--write-graph', action='store_true', default=False,
                     help='Write out computation graph.')
-parser.add_argument('--syn-type', default='accuracy|distribution')
+#parser.add_argument('--syn-type', default='accuracy|distribution')
 args = parser.parse_args()
 
 logging.basicConfig(stream=sys.stderr, level=logging.DEBUG) 
@@ -165,12 +165,8 @@ def get_batch(source, i, tag_source=None):
 def evaluate(data_source, data_tags):
   net.eval()
   total_loss = 0.0
-  if args.syn_type == 'accuracy':
-    total_corr = 0
-    total_item = 0
-  else:
-    KLs = []
-    prps = []
+  total_corr = 0
+  total_item = 0
 
   if args.type == 'jordan':
     hidden_state = net.init_hidden_state(eval_batch_size, data_source[:,0])
@@ -184,37 +180,13 @@ def evaluate(data_source, data_tags):
       loss = -1 * torch.mean(emit_marginal)
       total_loss += loss.item() * (data_tensor.size()[1] -1) 
 
-      data_tensor = data_tensor.squeeze()[1:]
-
       tags_tensor = tags_tensor.squeeze().cpu().numpy()[1:]
-      if args.syn_type == "accuracy":
-        emissions = emissions.squeeze()
-        for i in range(len(emissions.squeeze())):
-          p = int(emissions[i])
-          g = tags_tensor[i]
-          total_corr += 1 if (g != 0 and corpus.dict.tagDict[p] == g or g == p) else 0
-          total_item += 1
-      else:
-        pred_dist = emissions.squeeze()
-        gold_dist = corpus.dict.tag_embed[data_tensor.cpu().numpy()].squeeze()
-        kl_words = -1. * np.sum(pred_dist * np.log(pred_dist / gold_dist), axis=1)
-        KLs.extend(list(np.nan_to_num(kl_words)))    # TODO -- Remove
-
-        # Gross Hack for a .gather
-        probs = []
-        for i, j in enumerate(tags_tensor):
-          probs.append(pred_dist[i,j])
-        probs = np.array(probs)
-        prp = 2**(-1*probs * np.log2(probs))
-        prps.extend(list(prp))
+      preds = np.argmax(emissions.squeeze(), axis=1)
+      total_corr += np.sum(preds == tags_tensor)
+      total_item += len(preds)
 
       hidden_state = repackage_hidden(hidden_state)
-  if args.syn_type == 'accuracy':
-    perf = total_corr/total_item
-  else:
-    perf = np.mean(np.array(KLs))
-    perf = np.mean(np.array(prps))
-  return total_loss / (data_source.size(1) - 1), perf
+  return total_loss / (data_source.size(1) - 1), total_corr/total_item
 
 num_parameters = sum(p.numel() for p in net.parameters() if p.requires_grad)
 h_print("Trainable parameters: %d" % num_parameters)
@@ -309,7 +281,7 @@ for epoch in range(args.epochs):
         epoch, step, lr, elapsed * 1000 / step, cur_loss, math.exp(cur_loss), cur_loss / math.log(2)))
     
   val_loss, val_acc = evaluate(val_data, val_tags)
-  h_print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f} | valid bpc {:4.4f} | tag acc/prp {:4.4f}'.format(
+  h_print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | valid ppl {:8.2f} | valid bpc {:4.4f} | tag acc {:4.4f}'.format(
         epoch, (time.time() - start_time), val_loss, math.exp(val_loss), val_loss / math.log(2), val_acc))
 
   writer.add_scalar('Prp_Train', math.exp(cur_loss), epoch)
@@ -352,7 +324,6 @@ if args.test:
   with open(args.test_model, 'rb') as f:
       net = torch.load(f)
       net.corpus = corpus  # HACK
-      net.syn_type = args.syn_type
       # after load the rnn params are not a continuous chunk of memory
       # this makes them a continuous chunk, and will speed up forward pass
       # net.rnn.flatten_parameters() #TODO
@@ -361,7 +332,7 @@ if args.test:
   #test_loss, test_acc = evaluate(test_data, test_tags)
   test_loss, test_acc = evaluate(val_data, val_tags)
   h_print('=' * 89)
-  h_print('| End of training | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:4.4f} | tag acc/prp {:4.4f}'.format(
+  h_print('| End of training | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:4.4f} | tag acc {:4.4f}'.format(
       test_loss, math.exp(test_loss), test_loss / math.log(2), test_acc))
   h_print('=' * 89)
 

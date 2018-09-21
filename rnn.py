@@ -243,10 +243,7 @@ class RNN(nn.Module):
     t = len(self.corpus.dict.i2tag)
     emit_marginal = None
 
-    if self.syn_type == "accuracy":
-      emissions = np.zeros((N,T-1))
-    else:
-      emissions = np.zeros((N,T-1,t))
+    emissions = np.zeros((N,T-1,t))
 
     if self.type.startswith('hmm') or self.type == 'elman-hmm-emit':
       # Emission distribution (input invariant)
@@ -289,10 +286,7 @@ class RNN(nn.Module):
         emit_marginal = emit_marginal + emit_ll
 
       if compute_emit:
-        if self.syn_type == "accuracy":
-          emissions[:,t-1] = torch.argmax(emit_distr).cpu().numpy()
-        else:
-          emissions[:, t-1, :] = emit_distr.cpu().numpy() @ self.corpus.dict.tag_embed
+        emissions[:, t-1, :] = emit_distr.cpu().numpy() @ self.corpus.dict.tag_embed
 
     if compute_emit:
       return emit_marginal / (T - 1), hidden_state, emissions

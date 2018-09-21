@@ -24,6 +24,23 @@ class Dictionary(object):
 class Corpus(object):
   def __init__(self, path):
     self.dict = Dictionary()
+
+    self.mapping = {
+        "CC": "CONJ", "CD": "NUM", "CD|RB": "X", "DT": "DET", "EX": "DET", 
+        "FW": "X", "IN": "ADP", "IN|RP": "ADP", "JJ": "ADJ", "JJR": "ADJ",
+        "JJRJR": "ADJ", "JJS": "ADJ", "JJ|RB": "ADJ", "JJ|VBG": "ADJ",
+        "LS": "X", "MD": "VERB", "NN": "NOUN", "NNP": "NOUN", "NNPS": "NOUN",
+        "NNS": "NOUN", "NN|NNS": "NOUN", "NN|SYM": "NOUN", "NN|VBG": "NOUN",
+        "NP": "NOUN", "PDT": "DET", "POS": "PRT", "PRP": "PRON",
+        "PRP$": "PRON", "PRP|VBP": "PRON", "PRT": "PRT", "RB": "ADV",
+        "RBR": "ADV", "RBS": "ADV", "RB|RP": "ADV", "RB|VBG": "ADV",
+        "RN": "X", "RP": "PRT", "SYM": "X", "TO": "PRT", "UH": "X",
+        "VB": "VERB", "VBD": "VERB", "VBD|VBN": "VERB", "VBG": "VERB",
+        "VBG|NN": "VERB", "VBN": "VERB", "VBP": "VERB", "VBP|TO": "VERB",
+        "VBZ": "VERB", "VP": "VERB", "WDT": "DET", "WH": "X", "WP": "PRON",
+        "WP$": "PRON", "WRB": "ADV", "$": ".", "#": "."
+    }
+
     self.train, _ = self.tokenize(os.path.join(path, 'train.txt.gz'))
     self.build_tag_dict(os.path.join(path, '../ptb-tagged/train.tagged.gz'))
 
@@ -33,6 +50,19 @@ class Corpus(object):
     self.test_tags = self.tags(os.path.join(path, '../ptb-tagged/test.aligned.txt.gz'), size)
 
 
+  def UPOS(self, tag):
+    simplify = False
+    if simplify:
+      return self.mapping[tag.decode('utf-8').upper()]
+    return tag
+
+  def num(self, word, tag):
+    if word.decode('utf-8').isnumeric():
+      return True
+    if word not in self.dict.voc2i:
+      return tag == "CD".encode() or tag == "NUM"
+    return False
+
   def build_tag_dict(self, path):
     assert os.path.exists(path)
     tagset = set()
@@ -41,9 +71,9 @@ class Corpus(object):
     for line in gzip.open(path, 'r'):
       for w in line.lower().strip().split():
         w = w.rsplit("/".encode(),1)
-        tag = w[1].split("|".encode())[0]
+        tag = self.UPOS(w[1].split("|".encode())[0])
         word = w[0]
-        if (tag == "CD".encode() and w[0] not in self.dict.voc2i) or word.decode('utf-8').isnumeric():
+        if self.num(word, tag):
           word = "N".encode()
         if word not in self.dict.voc2i:
           word = "<unk>".encode()
@@ -87,7 +117,7 @@ class Corpus(object):
     token = 1
     for line in gzip.open(path, 'r'):
       for word in line.strip().split():
-        tag = word.lower().rsplit("/".encode(),1)[1].split("|".encode())[0]
+        tag = self.UPOS(word.lower().rsplit("/".encode(),1)[1].split("|".encode())[0])
         ids[token] = self.dict.tag2i[tag]
         token += 1
       ids[token] = self.dict.eos_tag
