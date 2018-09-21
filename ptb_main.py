@@ -148,6 +148,7 @@ vocab_size = len(corpus.dict)
 print("Vocab size: %d" % vocab_size)
 
 net = rnn.RNN(vocab_size, args).to(device)
+net.corpus = corpus  # HACK
 
 def repackage_hidden(h):
   """Wraps hidden states in new Tensors, to detach them from their history."""
@@ -235,7 +236,8 @@ for epoch in range(args.epochs):
   hidden_state = zero_hidden()
 
   inds = list(range(train_data.size(1) - 1))
-  iterate = tqdm.tqdm(range(0, len(inds) - len(inds)%args.max_len, args.max_len), ncols=80, disable=True)
+  iterate = tqdm.tqdm(range(0, len(inds) - len(inds)%args.max_len,
+      args.max_len), ncols=80, disable=True) 
   for i in iterate:
     data_tensor = get_batch(train_data, i)
     if random.random() < 0.01:

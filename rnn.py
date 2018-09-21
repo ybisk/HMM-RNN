@@ -14,7 +14,7 @@ class RNN(nn.Module):
     self.type = args.type
     self.delay_softmax = args.delay_softmax
     self.feeding = args.feeding 
-    self. type = args.type
+    self.type = args.type
     self.glove_emb = args.glove_emb
     self.logspace_hidden = True
 
@@ -55,9 +55,9 @@ class RNN(nn.Module):
                                 delay_trans_softmax = (self.type == 'hmm+1'),
                                 with_trans_gate = (self.type == 'hmm-g'))
     elif args.type.startswith('elman'): 
-      if elman.startswith('elman-linear'):
+      if args.type.startswith('elman-linear'):
         nonlin = ''
-      elif elman.startswith('elman-softmax'):
+      elif args.type.startswith('elman-softmax'):
         nonlin = 'softmax'
       else:
         nonlin = 'sigmoid'
@@ -71,7 +71,7 @@ class RNN(nn.Module):
           delayed_nonlin = (args.type == 'rnn-2'), multiplicative =
           (args.type == 'rnn-3'))
     elif args.type.startswith('rrnn'):
-      nonlin = '' if args.type == 'rrnn-1' or args.type == 'rrnn-r' else 'sigmoid'
+      nonlin = '' if args.type == 'rrnn-2' or args.type == 'rrnn-r' else 'sigmoid'
       self.trans = cell.RationalCell(self.embed_dim, self.hidden_dim, nonlin)
       if args.type == 'rrnn-r':
         self.reset_tr = nn.Linear(self.hidden_dim, self.hidden_dim, bias=True)
@@ -136,7 +136,9 @@ class RNN(nn.Module):
       emb, _ = self.encode_context(emb)
     return emb.permute(0, 2, 1) # batch_size x embed_dim x seq_length 
 
-  def rnn_step(self, state_input, hidden_state, word_idx, current_embed=None):
+  def rnn_step(self, state_input, hidden_state, word_idx, emit_distr=None, 
+               compute_emit=False):
+    N = word_idx.size()[0] # batch size
     # Transition
     if self.type == 'lstm':
       #hidden_output, hidden_cell_state = self.trans(state_input.unsqueeze(0), 
@@ -151,7 +153,7 @@ class RNN(nn.Module):
       hidden_output = self.trans(state_input, hidden_state)
 
     # Emit
-    if self.type == 'rrnn' or self.type == 'rrnn-1':
+    if self.type == 'rrnn':
       output = torch.sigmoid(hidden_output.clone())
       #output = torch.tanh(hidden_output.clone())
     elif self.type == 'rrnn-r':
@@ -161,11 +163,22 @@ class RNN(nn.Module):
     else:
       output = hidden_output.clone()
 
-    if self.type == 'elman-hmm-emit':
+    if self.type.startswith('elman') and self.type.endswith('-hmm-emit'):
       # First normalize sigmoid hidden output
-      output = torch.log(F.normalize(output, 1, 1))
+      #output = torch.log(F.normalize(output, 1, 1))
+      # Now assuming softmax in cell
+      output = torch.log(output)
+      current_embed = emit_distr.gather(0, word_idx.expand(N, self.hidden_dim))
       joint_state_ll = output + current_embed
       emit_ll = torch.logsumexp(joint_state_ll, 1)
+
+      if compute_emit:
+        emit_distr = torch.exp(emit_distr)
+        use_marginal = False
+        if use_marginal:
+          marginal = emit_distr @ hidden_state.transpose(0,1)
+        else:
+          marginal = emit_distr[:,torch.argmax(hidden_state, dim=1)]
     else:    
       if self.type.startswith('elman') and '-delayed' in self.type:
         output = F.softmax(output, 1) 
@@ -175,6 +188,8 @@ class RNN(nn.Module):
       logits = self.emit(output)
       emit_distr = F.log_softmax(logits, -1)        # Emission
       emit_ll = emit_distr.gather(1, word_idx).squeeze()           # Word Prob
+      if compute_emit:
+        marginal = torch.exp(emit_distr)
 
     # State Update
     if self.type == 'lstm':
@@ -185,7 +200,10 @@ class RNN(nn.Module):
     else:
       hidden_state = hidden_output 
 
-    return emit_ll, hidden_state, torch.exp(emit_distr).squeeze()
+    if compute_emit:
+      return emit_ll, hidden_state, marginal.squeeze()
+    else:
+      return emit_ll, hidden_state, None
 
   def hmm_step(self, state_input, hidden_state, emit_distr, word_idx, compute_emit=False):
     N = word_idx.size()[0] # batch size
@@ -262,12 +280,12 @@ class RNN(nn.Module):
   def forward(self, words, hidden_state, compute_emit=False):
     N = words.size()[0] # batch size
     T = words.size()[1] # sequence length
-    t = len(self.corpus.dict.i2tag)
+    num_tags = len(self.corpus.dict.i2tag)
     emit_marginal = None
+    emissions_over_tags = np.zeros((N,T-1,num_tags))
 
-    emissions = np.zeros((N,T-1,t))
-
-    if self.type.startswith('hmm') or self.type == 'elman-hmm-emit':
+    if (self.type.startswith('hmm') or (self.type.startswith('elman') 
+        and self.type.endswith('-hmm-emit'))):
       # Emission distribution (input invariant)
       # dim vocab_size x hidden_size (opposite of layer def order)
       emit_weight = self.emit.weight + self.emit.bias.view(self.vocab_size, 1).expand(self.vocab_size, self.hidden_dim) 
@@ -289,9 +307,6 @@ class RNN(nn.Module):
       if self.type.startswith('hmm-new'): 
         prev_embed = current_embed
         current_embed = emit_weight.gather(0, word_idx.expand(N, self.hidden_dim))
-      else:
-        if self.type == 'elman-hmm-emit':
-          current_embed = emit_weight.gather(0, word_idx.expand(N, self.hidden_dim))
 
       if self.type.startswith('hmm-new'):
         emit_ll, hidden_state = self.new_hmm_step(inp, prev_embed, current_embed, hidden_state, word_idx)
@@ -299,8 +314,9 @@ class RNN(nn.Module):
         emit_ll, hidden_state, emit_distr = self.hmm_step(inp, hidden_state,
                 emit_weight, word_idx, compute_emit=compute_emit)
       else:
-        emit_ll, hidden_state, emit_distr = self.rnn_step(inp, hidden_state, word_idx,
-                current_embed = (current_embed if self.type == 'elman-hmm-emit' else None))
+        emit_ll, hidden_state, emit_distr = self.rnn_step(inp, hidden_state, 
+                word_idx, emit_weight if (self.type.startswith('elman') 
+                  and self.type.endswith('-hmm-emit')) else None, compute_emit=compute_emit)
 
       if t == 1:
         emit_marginal = emit_ll
@@ -308,10 +324,10 @@ class RNN(nn.Module):
         emit_marginal = emit_marginal + emit_ll
 
       if compute_emit:
-        emissions[:, t-1, :] = emit_distr.cpu().numpy() @ self.corpus.dict.tag_embed
+        emissions_over_tags[:, t-1, :] = emit_distr.cpu().numpy() @ self.corpus.dict.tag_embed
 
     if compute_emit:
-      return emit_marginal / (T - 1), hidden_state, emissions
+      return emit_marginal / (T - 1), hidden_state, emissions_over_tags
     else:
       return emit_marginal / (T - 1), hidden_state
 

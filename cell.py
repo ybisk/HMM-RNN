@@ -42,14 +42,14 @@ class ElmanCell(nn.Module):
 
     self.transition = nn.Linear(hidden_dim, hidden_dim, bias=True)
     if not single_trans:
-      self.input_tr = nn.Linear(input_dim, hidden_dim, bias=trans_only_nonlin)
+      self.input_tr = nn.Linear(input_dim, hidden_dim, bias=(multiplicative))
 
   def forward(self, inp, state):
     if self.delayed_nonlin:
       state = apply_nonlin(state, self.nonlin)
 
     if self.multiplicative:
-      if single_trans:
+      if self.single_trans:
         state = self.transition(state * inp) # not working in logspace here 
       else:
         state = self.transition(state) * self.input_tr(inp)
