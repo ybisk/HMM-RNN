@@ -20,9 +20,11 @@ for root, dirs, files in os.walk("."):
             else:
               ind = line.index("ppl") + 1
             if "valid" in line:
-              valid = min(valid, float(line[ind]))
+              if line[ind] != "nan":
+                valid = min(valid, float(line[ind]))
             elif "batches" in line:
-              train = min(train, float(line[ind]))
+              if line[ind] != "nan":
+                train = min(train, float(line[ind]))
         results.append((valid, train, fname))
       except FileNotFoundError:
         continue
@@ -30,7 +32,7 @@ for root, dirs, files in os.walk("."):
 results.sort()
 for valid, train, fname in results:
   fname = fname.replace("l35_","")
-  fname = fname.replace(prefix + "_", "")
+  #fname = fname.replace(prefix + "_", "")
   fname = fname.replace(".log","")
   fname = fname.split("_")
   fname = " ".join(["{:8s}".format(v) for v in fname])
