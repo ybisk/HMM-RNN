@@ -12,7 +12,9 @@ class RNN(nn.Module):
     self.embed_dim = args.embed_dim
     self.vocab_size = vocab_size
     self.type = args.type
+    self.delay_softmax = args.delay_softmax
     self.feeding = args.feeding 
+    self. type = args.type
     self.glove_emb = args.glove_emb
     self.logspace_hidden = True
 
@@ -37,23 +39,39 @@ class RNN(nn.Module):
     # Transition cell
     if args.type.startswith('hmm-new'):
       assert self.hidden_dim == self.embed_dim and args.tie_embeddings
+      assert (self.feeding == 'none'
+              or args.type == 'hmm-new-tensor-feed' 
+              or args.type == 'hmm-new-add-feed' 
+              or args.type == 'hmm-new-gate-feed')
       self.trans = cell.HMMNewCell(self.hidden_dim, 
-                                   logspace_hidden = self.logspace_hidden,
-                                   feed_input = (self.feeding != 'none'), 
-                                   combine_input = (self.type == 'hmm-new-c'))
+              args.type == 'hmm-new-tensor-feed',
+              args.type == 'hmm-new-add-feed', 
+              args.type == 'hmm-new-gate-feed',
+              args.delay_softmax.startswith('trans'))
     elif args.type.startswith('hmm') or args.type.startswith('rnn-hmm'):
       self.trans = cell.HMMCell(self.embed_dim, self.hidden_dim, 
                                 logspace_hidden = self.logspace_hidden,
                                 feed_input = (self.feeding != 'none'), 
                                 delay_trans_softmax = (self.type == 'hmm+1'),
                                 with_trans_gate = (self.type == 'hmm-g'))
-    elif args.type.startswith('elman') or args.type.startswith('rnn'):
+    elif args.type.startswith('elman'): 
+      if elman.startswith('elman-linear'):
+        nonlin = ''
+      elif elman.startswith('elman-softmax'):
+        nonlin = 'softmax'
+      else:
+        nonlin = 'sigmoid'
+      self.trans = cell.ElmanCell(self.embed_dim, self.hidden_dim, nonlin,
+          delayed_nonlin = ('-delayed' in args.type), 
+          single_trans = ('-single' in args.type), 
+          multiplicative = ('-mult' in args.type))
+    elif args.type.startswith('rnn'):
       nonlin = 'softmax' if args.type == 'rnn-1' or args.type == 'rnn-2' else 'sigmoid'
       self.trans = cell.ElmanCell(self.embed_dim, self.hidden_dim, nonlin,
-          trans_only_nonlin = (args.type == 'rnn-2'), multiplicative =
+          delayed_nonlin = (args.type == 'rnn-2'), multiplicative =
           (args.type == 'rnn-3'))
     elif args.type.startswith('rrnn'):
-      nonlin = '' if args.type == 'rrnn-1' or args.type == 'rrnn-r' else 'tanh'
+      nonlin = '' if args.type == 'rrnn-1' or args.type == 'rrnn-r' else 'sigmoid'
       self.trans = cell.RationalCell(self.embed_dim, self.hidden_dim, nonlin)
       if args.type == 'rrnn-r':
         self.reset_tr = nn.Linear(self.hidden_dim, self.hidden_dim, bias=True)
@@ -134,7 +152,8 @@ class RNN(nn.Module):
 
     # Emit
     if self.type == 'rrnn' or self.type == 'rrnn-1':
-      output = torch.tanh(hidden_output.clone())
+      output = torch.sigmoid(hidden_output.clone())
+      #output = torch.tanh(hidden_output.clone())
     elif self.type == 'rrnn-r':
       # apply reset gate
       reset_gate = torch.sigmoid(self.reset_tr(state_input))
@@ -145,11 +164,14 @@ class RNN(nn.Module):
     if self.type == 'elman-hmm-emit':
       # First normalize sigmoid hidden output
       output = torch.log(F.normalize(output, 1, 1))
-
       joint_state_ll = output + current_embed
       emit_ll = torch.logsumexp(joint_state_ll, 1)
     else:    
-      output = self.drop(output)
+      if self.type.startswith('elman') and '-delayed' in self.type:
+        output = F.softmax(output, 1) 
+      else:
+        output = self.drop(output)
+
       logits = self.emit(output)
       emit_distr = F.log_softmax(logits, -1)        # Emission
       emit_ll = emit_distr.gather(1, word_idx).squeeze()           # Word Prob
@@ -215,14 +237,14 @@ class RNN(nn.Module):
     else:
       return emit_ll, hidden_state, None
 
-  def new_hmm_step(self, prev_embed, current_embed, hidden_state, word_idx):
+  def new_hmm_step(self, prev_embed_unnorm, prev_embed, current_embed, hidden_state, word_idx):
     N = hidden_state.size()[0] # batch size
 
     # Transition
-    hidden_output = self.trans(prev_embed, hidden_state)
+    hidden_output = self.trans(prev_embed_unnorm, prev_embed, hidden_state)
 
     # Emit 
-    if self.type == 'hmm-new-rnn-emit':
+    if self.delay_softmax.endswith('emit'):
       output = self.drop(hidden_output)
       logits = self.emit(torch.exp(output)) # need state as probabilities here
       emit_distr = F.log_softmax(logits, -1)
@@ -250,23 +272,23 @@ class RNN(nn.Module):
     if self.type.startswith('hmm-new'):
       word_idx = words[:, 0].unsqueeze(1).expand(N, self.hidden_dim)
       current_embed = emit_weight.gather(0, word_idx) # batch_size x hidden_dim
-    else:    
-      emb = self.embed_input(words[:,:-1])
-      emb = self.drop(emb)
+        
+    emb = self.embed_input(words[:,:-1])
+    emb = self.drop(emb)
 
     for t in range(1, T):
       word_idx = words[:, t].unsqueeze(1)
       
+      inp = emb[:,:,t-1] # unnormalized prev embed
       if self.type.startswith('hmm-new'): 
         prev_embed = current_embed
         current_embed = emit_weight.gather(0, word_idx.expand(N, self.hidden_dim))
       else:
-        inp = emb[:,:,t-1]
         if self.type == 'elman-hmm-emit':
           current_embed = emit_weight.gather(0, word_idx.expand(N, self.hidden_dim))
 
       if self.type.startswith('hmm-new'):
-        emit_ll, hidden_state = self.new_hmm_step(prev_embed, current_embed, hidden_state, word_idx)
+        emit_ll, hidden_state = self.new_hmm_step(inp, prev_embed, current_embed, hidden_state, word_idx)
       elif self.type.startswith('hmm'):
         emit_ll, hidden_state, emit_distr = self.hmm_step(inp, hidden_state,
                 emit_weight, word_idx, compute_emit=compute_emit)

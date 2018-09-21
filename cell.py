@@ -29,34 +29,39 @@ class BigramCell(nn.Module):
 
 class ElmanCell(nn.Module):
   def __init__(self, input_dim, hidden_dim, nonlin='sigmoid', 
-               trans_only_nonlin=False, multiplicative=False):
+               delayed_nonlin=False,
+               single_trans=False,
+               multiplicative=False):
     super(ElmanCell, self).__init__()
     self.input_dim = input_dim
     self.hidden_dim = hidden_dim
     self.nonlin = nonlin
-    self.trans_only_nonlin = trans_only_nonlin
+    self.delayed_nonlin = delayed_nonlin
+    self.single_trans = single_trans
     self.multiplicative = multiplicative
 
     self.transition = nn.Linear(hidden_dim, hidden_dim, bias=True)
-
-    assert not (trans_only_nonlin and multiplicative)
-    if not multiplicative:
+    if not single_trans:
       self.input_tr = nn.Linear(input_dim, hidden_dim, bias=trans_only_nonlin)
 
   def forward(self, inp, state):
-    if self.multiplicative:
-      inp_state = state * inp  # not working in logspace here 
-      state = self.transition(inp_state)
+    if self.delayed_nonlin:
       state = apply_nonlin(state, self.nonlin)
+
+    if self.multiplicative:
+      if single_trans:
+        state = self.transition(state * inp) # not working in logspace here 
+      else:
+        state = self.transition(state) * self.input_tr(inp)
     else:
       state = self.transition(state)
-
-      if self.trans_only_nonlin:
-        state = apply_nonlin(state, self.nonlin)
-        state = state + self.input_tr(inp) #TODO maybe we should rather multiply here?
+      if self.single_trans:
+        state = state + inp
       else:
         state = state + self.input_tr(inp)
-        state = apply_nonlin(state, self.nonlin)
+
+    if not self.delayed_nonlin:
+      state = apply_nonlin(state, self.nonlin)
 
     return state
 
@@ -145,9 +150,8 @@ class HMMCell(nn.Module):
       if self.logspace_hidden:
         if self.with_trans_gate:
           gate = torch.sigmoid(self.gate_tr(inp)) # each gate element scales distrubution given previous hidden state
-          #TODO check direction of gating; implement in new hmm. 
           trans_distr = trans_distr * gate.view(batch_size, self.hidden_dim, 1).expand(
-                  batch_size, self.hidden_dim, self.hidden_dim)
+                  batch_size, self.hidden_dim, self.hidden_dim) 
           # Note that at the moment we have to apply the gate before softmaxing
           trans_distr = F.log_softmax(trans_distr, dim=1)
         else:
@@ -164,21 +168,21 @@ class HMMCell(nn.Module):
 
 
 class HMMNewCell(nn.Module):
-  def __init__(self, hidden_dim, logspace_hidden=False,
-               feed_input=False, combine_input=False):
+  def __init__(self, hidden_dim, tensor_feed_input=False, add_feed_input=False,
+               gate_feed_input=False, delay_trans_softmax=False):
     super(HMMNewCell, self).__init__()
     self.hidden_dim = hidden_dim
-    self.logspace_hidden = logspace_hidden
-    self.feed_input = feed_input
-    self.combine_input = combine_input
-    assert not (feed_input and combine_input)
+    self.tensor_feed_input = tensor_feed_input
+    self.add_feed_input = add_feed_input
+    self.gate_feed_input = gate_feed_input
+    self.delay_trans_softmax = delay_trans_softmax
    
-    if feed_input:
+    if tensor_feed_input:
       self.transition = nn.Linear(self.hidden_dim, self.hidden_dim**2, bias=True)
     else:
-      self.transition = nn.Linear(1, self.hidden_dim**2, bias=False)
+      self.transition = nn.Linear(1, self.hidden_dim**2, bias=True) #TODO test with bias
 
-    if combine_input:
+    if add_feed_input or gate_feed_input:
       self.input_tr = nn.Linear(hidden_dim, hidden_dim, bias=True)
 
     self.init_weights()
@@ -186,33 +190,35 @@ class HMMNewCell(nn.Module):
   def init_weights(self, initrange=1.0):
     self.transition.weight.data.uniform_(-initrange, initrange)   # 0 to e (logspace)
 
-  def forward(self, inp, state):
-    # assume input is log_softmax(E)[prev_word]
+  def forward(self, inp, inp_sm, state):
+    # assume inp is E[prev_word]
+    # assume inp_sm is log_softmax(E)[prev_word]
     batch_size = state.size()[0]
 
-    trans_inp = torch.exp(inp) if self.feed_input else inp.new_ones((batch_size, 1))
+    trans_inp = inp if self.tensor_feed_input else inp.new_ones((batch_size, 1))
     trans_distr = self.transition(trans_inp).view(batch_size, self.hidden_dim, 
                                             self.hidden_dim)
 
-    inp_state = inp + state
-    if self.logspace_hidden:
-      inp_state = F.log_softmax(inp_state, dim=1)
-    else:
-      inp_state = F.softmax(inp_state, dim=1)
-
-    if self.combine_input: #TODO check if we're expanding in right dimension here?
+    if self.add_feed_input: 
       # each input transtions element scales distrubution given previous hidden state
-      trans_distr += self.input_tr(torch.exp(inp)).view(batch_size, self.hidden_dim, 1) #expand
+      trans_distr += self.input_tr(inp).view(batch_size, self.hidden_dim, 1)
+    elif self.gate_feed_input:
+      # each gate element scales distribution independent of previous hidden state
+      gate = torch.sigmoid(self.input_tr(inp)) 
+      trans_distr = trans_distr * gate.view(batch_size, self.hidden_dim, 1).expand(
+                  batch_size, self.hidden_dim, self.hidden_dim) 
 
-    if self.logspace_hidden:
-      trans_distr = F.log_softmax(trans_distr, dim=1)
-      next_state = trans_distr + inp_state.view(batch_size, 1, self.hidden_dim)
-            #.expand(batch_size, self.hidden_dim, self.hidden_dim)
-      next_state = torch.logsumexp(next_state, 2)
+    inp_state = inp_sm + state
+    inp_state = F.softmax(inp_state, dim=1)
+
+    if self.delay_trans_softmax:
+      next_state = trans_distr @ inp_state.unsqueeze(2)
+      next_state = F.softmax(next_state, dim=1)
     else:
       trans_distr = F.softmax(trans_distr, dim=1)
       next_state = trans_distr @ inp_state.unsqueeze(2) 
-      next_state = torch.log(next_state)
+
+    next_state = torch.log(next_state)
 
     return next_state.view(batch_size, self.hidden_dim)
 

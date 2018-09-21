@@ -19,9 +19,11 @@ parser.add_argument('--save', type=str, default='model',
 parser.add_argument('--epochs', type=int, default=100, help='number of epochs')
 
 parser.add_argument('--type', type=str, default='hmm',
-                    help='hmm-new|hmm-new-c|hmm-new-rnn-emit|hmm|hmm+1|hmm+2|hmm-1|hmm-g|jordan|elman|elman-hmm-emit|rnn-hmm|rrnn|rrnn-1|rrnn-2|gru|lstm|rnn-1|rnn-2|rnn-3|bigram')
+                    help='hmm-new|hmm-new-tensor-feed|hmm-new-add-feed|hmm-new-gate-feed|hmm-new-rnn-emit|hmm|hmm+1|hmm+2|hmm-1|hmm-g|jordan|elman|elman-hmm-emit|elman-softmax|elman-linear|elman-delay-softmax|elman-linear-delay-softmax|rnn-hmm|rrnn|rrnn-1|rrnn-2|gru|lstm|rnn-1|rnn-2|rnn-3|bigram')
 parser.add_argument('--feeding', type=str, default='word',
                     help='none|word|encode-lstm')
+parser.add_argument('--delay-softmax', type=str, default='none', 
+                    help='hmm-new delay softmax: none|trans|emit|trans-emit')
 parser.add_argument('--glove-emb', action='store_true', default=False,
                     help='Use GloVe embeddings instead of learning embeddings.')
 parser.add_argument('--test', action='store_true', default=False,
