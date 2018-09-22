@@ -183,7 +183,7 @@ class HMMNewCell(nn.Module):
     if tensor_feed_input:
       self.transition = nn.Linear(self.hidden_dim, self.hidden_dim**2, bias=True)
     else:
-      self.transition = nn.Linear(1, self.hidden_dim**2, bias=True) #TODO test with bias
+      self.transition = nn.Linear(1, self.hidden_dim**2, bias=True)
 
     if add_feed_input or gate_feed_input:
       self.input_tr = nn.Linear(hidden_dim, hidden_dim, bias=True)

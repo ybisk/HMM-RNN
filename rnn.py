@@ -261,7 +261,8 @@ class RNN(nn.Module):
     else:
       return emit_ll, hidden_state, None
 
-  def new_hmm_step(self, prev_embed_unnorm, prev_embed, current_embed, hidden_state, word_idx):
+  def new_hmm_step(self, prev_embed_unnorm, prev_embed, current_embed,
+          hidden_state, emit_distr_fixed, word_idx, compute_emit=False):
     N = hidden_state.size()[0] # batch size
 
     # Transition
@@ -276,6 +277,8 @@ class RNN(nn.Module):
       logits = self.emit(output) 
       emit_distr = F.log_softmax(logits, -1)
       emit_ll = emit_distr.gather(1, word_idx).squeeze()
+      if compute_emit:
+        marginal = torch.exp(emit_distr)
     else:
       if 'sigmoid' in self.type:
         if '-prob' in self.type:
@@ -290,7 +293,22 @@ class RNN(nn.Module):
       joint_state_ll = output + current_embed
       emit_ll = torch.logsumexp(joint_state_ll, 1)
 
-    return emit_ll, hidden_output
+      if compute_emit:
+        if '-prob' not in self.type:
+          emit_distr = torch.exp(emit_distr_fixed)
+        output_prob = torch.exp(output)
+
+        use_marginal = False
+        if use_marginal:
+          marginal = emit_distr @ output_prob.transpose(0,1)
+        else:
+          marginal = emit_distr[:,torch.argmax(output, dim=1)]
+
+    if compute_emit:
+      return emit_ll, output, marginal.squeeze()
+    else:
+      return emit_ll, output, None
+
 
   def forward(self, words, hidden_state, compute_emit=False):
     N = words.size()[0] # batch size
@@ -304,7 +322,9 @@ class RNN(nn.Module):
       # Emission distribution (input invariant)
       # dim vocab_size x hidden_size (opposite of layer def order)
       emit_weight = self.emit.weight + self.emit.bias.view(self.vocab_size, 1).expand(self.vocab_size, self.hidden_dim) 
-      if not self.type == 'hmm+2': # delay emit softmax
+      if self.type.startswith('hmm-new') and '-prob' in self.type:
+        emit_weight = F.softmax(emit_weight, 0) 
+      elif not self.type == 'hmm+2': # delay emit softmax
         emit_weight = F.log_softmax(emit_weight, 0) 
 
     # Embed
@@ -322,9 +342,8 @@ class RNN(nn.Module):
       if self.type.startswith('hmm-new'): 
         prev_embed = current_embed
         current_embed = emit_weight.gather(0, word_idx.expand(N, self.hidden_dim))
-
-      if self.type.startswith('hmm-new'):
-        emit_ll, hidden_state = self.new_hmm_step(inp, prev_embed, current_embed, hidden_state, word_idx)
+        emit_ll, hidden_state, emit_distr = self.new_hmm_step(inp, prev_embed,
+                current_embed, hidden_state, emit_weight, word_idx, compute_emit=compute_emit)
       elif self.type.startswith('hmm'):
         emit_ll, hidden_state, emit_distr = self.hmm_step(inp, hidden_state,
                 emit_weight, word_idx, compute_emit=compute_emit)
