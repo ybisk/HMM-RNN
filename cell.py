@@ -169,13 +169,16 @@ class HMMCell(nn.Module):
 
 class HMMNewCell(nn.Module):
   def __init__(self, hidden_dim, tensor_feed_input=False, add_feed_input=False,
-               gate_feed_input=False, delay_trans_softmax=False):
+               gate_feed_input=False, delay_trans_softmax=False,
+               sigmoid_trans=False, probspace=False):
     super(HMMNewCell, self).__init__()
     self.hidden_dim = hidden_dim
     self.tensor_feed_input = tensor_feed_input
     self.add_feed_input = add_feed_input
     self.gate_feed_input = gate_feed_input
     self.delay_trans_softmax = delay_trans_softmax
+    self.sigmoid_trans = sigmoid_trans
+    self.probspace = probspace
    
     if tensor_feed_input:
       self.transition = nn.Linear(self.hidden_dim, self.hidden_dim**2, bias=True)
@@ -208,9 +211,16 @@ class HMMNewCell(nn.Module):
       trans_distr = trans_distr * gate.view(batch_size, self.hidden_dim, 1).expand(
                   batch_size, self.hidden_dim, self.hidden_dim) 
 
-    inp_state = inp_sm + state
-    inp_state = F.softmax(inp_state, dim=1)
-
+    if self.probspace:
+      inp_state = inp_sm + state
+      inp_state = F.softmax(inp_state, dim=1)
+    else:
+      inp_state = inp_sm * state
+      inp_state = F.normalize(inp_state, 1, 1)
+    
+    if self.sigmoid_trans:
+      next_state = trans_distr @ inp_state.unsqueeze(2)
+      next_state = torch.sigmoid(next_state)
     if self.delay_trans_softmax:
       next_state = trans_distr @ inp_state.unsqueeze(2)
       next_state = F.softmax(next_state, dim=1)
@@ -218,7 +228,8 @@ class HMMNewCell(nn.Module):
       trans_distr = F.softmax(trans_distr, dim=1)
       next_state = trans_distr @ inp_state.unsqueeze(2) 
 
-    next_state = torch.log(next_state)
+    if not self.probspace:
+      next_state = torch.log(next_state)
 
     return next_state.view(batch_size, self.hidden_dim)
 

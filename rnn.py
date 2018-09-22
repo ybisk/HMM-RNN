@@ -40,14 +40,16 @@ class RNN(nn.Module):
     if args.type.startswith('hmm-new'):
       assert self.hidden_dim == self.embed_dim and args.tie_embeddings
       assert (self.feeding == 'none'
-              or args.type == 'hmm-new-tensor-feed' 
-              or args.type == 'hmm-new-add-feed' 
-              or args.type == 'hmm-new-gate-feed')
+              or args.type.startswith('hmm-new-tensor-feed')
+              or args.type.startswith('hmm-new-add-feed')
+              or args.type.startswith('hmm-new-gate-feed'))
       self.trans = cell.HMMNewCell(self.hidden_dim, 
-              args.type == 'hmm-new-tensor-feed',
-              args.type == 'hmm-new-add-feed', 
-              args.type == 'hmm-new-gate-feed',
-              args.delay_softmax.startswith('trans'))
+              args.type.startswith('hmm-new-tensor-feed'),
+              args.type.startswith('hmm-new-add-feed'),
+              args.type.startswith('hmm-new-gate-feed'),
+              args.delay_softmax.startswith('trans'),
+              '-sigmoid' in args.type,
+              '-prob' in args.type)
     elif args.type.startswith('hmm') or args.type.startswith('rnn-hmm'):
       self.trans = cell.HMMCell(self.embed_dim, self.hidden_dim, 
                                 logspace_hidden = self.logspace_hidden,
@@ -264,15 +266,28 @@ class RNN(nn.Module):
 
     # Transition
     hidden_output = self.trans(prev_embed_unnorm, prev_embed, hidden_state)
+    output = hidden_output.clone()
 
     # Emit 
-    if self.delay_softmax.endswith('emit'):
-      output = self.drop(hidden_output)
-      logits = self.emit(torch.exp(output)) # need state as probabilities here
+    if self.delay_softmax.endswith('emit'): # delay_softmax emit = rnn-emit
+      if not '-prob' in self.type:
+        output = torch.exp(output)
+      output = self.drop(output)
+      logits = self.emit(output) 
       emit_distr = F.log_softmax(logits, -1)
       emit_ll = emit_distr.gather(1, word_idx).squeeze()
     else:
-      joint_state_ll = hidden_output + current_embed
+      if 'sigmoid' in self.type:
+        if '-prob' in self.type:
+          output = F.normalize(output, 1, 1)
+          output = torch.log(output)
+        else:
+          output = F.log_softmax(output, 1)
+      else:
+        if '-prob' in self.type:
+          output = torch.log(output)
+
+      joint_state_ll = output + current_embed
       emit_ll = torch.logsumexp(joint_state_ll, 1)
 
     return emit_ll, hidden_output
