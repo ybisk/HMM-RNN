@@ -212,16 +212,16 @@ class HMMNewCell(nn.Module):
                   batch_size, self.hidden_dim, self.hidden_dim) 
 
     if self.probspace:
-      inp_state = inp_sm + state
-      inp_state = F.softmax(inp_state, dim=1)
-    else:
       inp_state = inp_sm * state
       inp_state = F.normalize(inp_state, 1, 1)
+    else:
+      inp_state = inp_sm + state
+      inp_state = F.softmax(inp_state, dim=1)
     
     if self.sigmoid_trans:
       next_state = trans_distr @ inp_state.unsqueeze(2)
       next_state = torch.sigmoid(next_state)
-    if self.delay_trans_softmax:
+    elif self.delay_trans_softmax:
       next_state = trans_distr @ inp_state.unsqueeze(2)
       next_state = F.softmax(next_state, dim=1)
     else:

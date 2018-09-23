@@ -138,7 +138,7 @@ class RNN(nn.Module):
       emb, _ = self.encode_context(emb)
     return emb.permute(0, 2, 1) # batch_size x embed_dim x seq_length 
 
-  def rnn_step(self, state_input, hidden_state, word_idx, emit_distr=None, 
+  def rnn_step(self, state_input, hidden_state, word_idx, emit_distr_fixed=None, 
                compute_emit=False):
     N = word_idx.size()[0] # batch size
     # Transition
@@ -165,22 +165,22 @@ class RNN(nn.Module):
     else:
       output = hidden_output.clone()
 
-    if self.type.startswith('elman') and self.type.endswith('-hmm-emit'):
+    if self.type.startswith('elman-softmax') and self.type.endswith('-hmm-emit'):
       # First normalize sigmoid hidden output
       #output = torch.log(F.normalize(output, 1, 1))
       # Now assuming softmax in cell
       output = torch.log(output)
-      current_embed = emit_distr.gather(0, word_idx.expand(N, self.hidden_dim))
+      current_embed = emit_distr_fixed.gather(0, word_idx.expand(N, self.hidden_dim))
       joint_state_ll = output + current_embed
       emit_ll = torch.logsumexp(joint_state_ll, 1)
 
       if compute_emit:
-        emit_distr = torch.exp(emit_distr)
+        emit_distr = torch.exp(emit_distr_fixed)
         use_marginal = False
         if use_marginal:
-          marginal = emit_distr @ hidden_state.transpose(0,1)
+          marginal = emit_distr @ hidden_output.transpose(0,1)
         else:
-          marginal = emit_distr[:,torch.argmax(hidden_state, dim=1)]
+          marginal = emit_distr[:,torch.argmax(hidden_output, dim=1)]
     else:    
       if self.type.startswith('elman') and '-delayed' in self.type:
         output = F.softmax(output, 1) 
@@ -296,6 +296,8 @@ class RNN(nn.Module):
       if compute_emit:
         if '-prob' not in self.type:
           emit_distr = torch.exp(emit_distr_fixed)
+        else:
+          emit_distr = emit_distr_fixed
         output_prob = torch.exp(output)
 
         use_marginal = False
@@ -305,9 +307,9 @@ class RNN(nn.Module):
           marginal = emit_distr[:,torch.argmax(output, dim=1)]
 
     if compute_emit:
-      return emit_ll, output, marginal.squeeze()
+      return emit_ll, hidden_output, marginal.squeeze()
     else:
-      return emit_ll, output, None
+      return emit_ll, hidden_output, None
 
 
   def forward(self, words, hidden_state, compute_emit=False):
