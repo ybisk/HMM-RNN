@@ -165,11 +165,14 @@ class RNN(nn.Module):
     else:
       output = hidden_output.clone()
 
-    if self.type.startswith('elman-softmax') and self.type.endswith('-hmm-emit'):
+    if self.type.startswith('elman') and self.type.endswith('-hmm-emit'):
       # First normalize sigmoid hidden output
       #output = torch.log(F.normalize(output, 1, 1))
       # Now assuming softmax in cell
-      output = torch.log(output)
+      if self.type.startswith('elman-softmax'):
+        output = torch.log(output)
+      else:
+        output = torch.log(F.normalize(output, 1, 1))
       current_embed = emit_distr_fixed.gather(0, word_idx.expand(N, self.hidden_dim))
       joint_state_ll = output + current_embed
       emit_ll = torch.logsumexp(joint_state_ll, 1)
@@ -184,6 +187,8 @@ class RNN(nn.Module):
     else:    
       if self.type.startswith('elman') and '-delayed' in self.type:
         output = F.softmax(output, 1) 
+      elif self.type.startswith('elman') and '-norm' in self.type:
+        output = F.normalize(output, 1, 1) 
       else:
         output = self.drop(output)
 
